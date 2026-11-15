@@ -1,4 +1,4 @@
-"""Library tidy-up tools: photos filed in the wrong year folder, and duplicate files.
+"""Library tidy-up tools: photos filed in the wrong year folder, and duplicate files (junk.py uses the holding area).
 
 Both run as background jobs (they may read file headers or whole files the first time) and keep
 their last result in memory. Moving and removing files hold library.fs_lock so the folder indexer
@@ -110,20 +110,34 @@ YEAR_SEG = re.compile(r"^(?:19|20)\d\d$")
 MONTH_SEG = re.compile(r"^(?:0?[1-9]|1[0-2])$")
 # 20180812, 2018-08-12, 2018_08_12 (IMG_20180812_..., PXL_2021..., IMG-20190812-WA0001, Screenshot 2020-01-02)
 NAME_DATE = re.compile(r"(?<!\d)((?:19|20)\d\d)[-_.]?(0[1-9]|1[0-2])[-_.]?(0[1-9]|[12]\d|3[01])(?!\d)")
+# 07-29-08_1828.jpg: month-day-year_time, as older phones named their pictures
+NAME_DATE_MDY = re.compile(r"(?<!\d)(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])-(\d\d)_\d{4}(?!\d)")
+# a year written as a word in a file name ("Emmas Bday Jun-1995", "headshot 2003"), not a counter like IMG_2005
+NAME_YEAR = re.compile(r"(?:^|(?<=[\s(,-]))((?:19|20)\d\d)(?!\d)")
 YEAR_WORD = re.compile(r"(?<!\d)((?:19|20)\d\d)(?!\d)")
-MONTHS = {m: i + 1 for i, m in enumerate(
-    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
-MONTH_WORD = re.compile(r"\b(" + "|".join(MONTHS) + r")[a-z]*\b", re.I)
+DECADE_WORD = re.compile(r"(?<!\d)((?:19|20)\d)0'?s\b", re.I)  # "1980s"
+MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+               "november", "december"]
+MONTHS = {m[:3]: i + 1 for i, m in enumerate(MONTH_NAMES)}
+# a month only counts when a year follows it ("Oct 2026", "Sept-2008"), so "May" or "Mar" inside other words do not
+MONTH_YEAR = re.compile(r"\b(" + "|".join(MONTH_NAMES) + r"|sept|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)"
+                        r"[\s,._-]*'?((?:19|20)\d\d)(?!\d)", re.I)
 
 # How much each kind of evidence is trusted (0..1)
 W_CAMERA = 0.9        # EXIF date taken
 W_VIDEO = 0.8         # QuickTime/MP4 creation time (stored in UTC)
+W_SAVED = 0.4         # EXIF "last saved" date only: often when the picture was edited or copied
+W_SCANNED = 0.15      # a scanner's date, or a digital date on a pre-digital photo: when it was scanned, not taken
 W_DEFAULT_CLOCK = 0.3  # a camera date that looks like an unset clock (1980, Jan 1 00:00, ...)
 W_NEW_YEAR = 0.35     # within a day of New Year: time zones may legitimately put it in either year
 W_FILE_NAME = 0.7
+W_FILE_NAME_MDY = 0.6  # 07-29-08_1828: two-digit year
+W_NAME_YEAR = 0.5     # a year written in the file name
 W_FOLDER_NAME = 0.6   # a year in an event folder's name, e.g. "Birthday Nov 2011"
 W_SIBLINGS = 0.7      # (files with no date of their own) most other files in the same folder agree
 W_MODIFIED = 0.2      # file modified time: often just the date it was copied, so it never suggests a year alone
+
+DIGITAL_ERA = 1998    # before this, a digital date ten or more years later is a scan of a print
 
 HIGH, MEDIUM = 0.75, 0.5
 
@@ -142,38 +156,86 @@ def _fmt(ts):
     return f"{d.day} {d:%b %Y}"
 
 
-def _evidence(m, rel_parts, yi, siblings):
-    """[(year, month or None, weight, label)] for one media row inside a year folder.
-    siblings: Counter of metadata years of the other files in the same folder."""
-    now_year = datetime.now().year
-    ok = lambda y: 1980 <= y <= now_year  # noqa: E731
-    folder_year = int(rel_parts[yi])
+def _now_year():
+    return datetime.now().year
+
+
+def _meta_ok(y):
+    return 1980 <= y <= _now_year()
+
+
+def _name_ok(y):
+    return 1900 <= y <= _now_year()
+
+
+def _own_evidence(m, era_year=None):
+    """[(year, month or None, weight, label)] from the file itself: its metadata date and its name.
+    era_year: the year the file is believed to be from (its year folder, or a decade in a folder name);
+    a digital date long after a pre-digital year is treated as the date the print was scanned."""
     ev = []
     if m["meta_date"]:
         d = datetime.fromtimestamp(m["meta_date"])
-        w = W_VIDEO if m["kind"] == "video" else W_CAMERA
-        what = "Video recorded" if m["kind"] == "video" else "Camera date"
-        note = ""
-        if d.year < 1995 or (d.month == 1 and d.day == 1 and d.hour == 0 and d.minute < 5):
-            w, note = W_DEFAULT_CLOCK, " (looks like the camera clock was not set)"
-        elif abs(d.year - folder_year) == 1 and ((d.month == 12 and d.day == 31) or (d.month == 1 and d.day == 1)):
-            w, note = W_NEW_YEAR, " (New Year, so the time zone may decide the year)"
-        if ok(d.year):
+        src = m["meta_src"] or ("video" if m["kind"] == "video" else "camera")
+        w, what, note = {
+            "camera": (W_CAMERA, "Camera date", ""),
+            "screen": (W_CAMERA, "Screenshot taken", ""),
+            "device": (W_VIDEO, "Date taken", ""),
+            "video": (W_VIDEO, "Video recorded", ""),
+            "saved": (W_SAVED, "Date the file was saved", " (may be when it was edited or copied)"),
+            "scan": (W_SCANNED, "Scanner date", " (when it was scanned, not taken)"),
+        }.get(src, (W_CAMERA, "Camera date", ""))
+        if src in ("camera", "video", "device"):
+            if d.year < 1995 or (d.month == 1 and d.day == 1 and d.hour == 0 and d.minute < 5):
+                w, note = W_DEFAULT_CLOCK, " (looks like the camera clock was not set)"
+            elif era_year and abs(d.year - era_year) == 1 and ((d.month == 12 and d.day == 31) or (d.month == 1 and d.day == 1)):
+                w, note = W_NEW_YEAR, " (New Year, so the time zone may decide the year)"
+        if era_year and era_year < DIGITAL_ERA and d.year >= era_year + 10 and w > W_SCANNED:
+            w, note = W_SCANNED, f" (a digital date on a {era_year} photo: probably when the print was scanned or photographed)"
+        if _meta_ok(d.year):
             ev.append((d.year, d.month, w, f"{what}: {_fmt(m['meta_date'])}{note}"))
-    nd = NAME_DATE.search(m["name"])
-    if nd and ok(int(nd.group(1))):
+    stem = os.path.splitext(m["name"])[0]
+    nd = NAME_DATE.search(stem)
+    md = NAME_DATE_MDY.search(stem)
+    if nd and _meta_ok(int(nd.group(1))):
         ev.append((int(nd.group(1)), int(nd.group(2)), W_FILE_NAME, f"Date in file name: {nd.group(0)}"))
+    elif md:
+        yy = int(md.group(3))
+        y = 2000 + yy if 2000 + yy <= _now_year() else 1900 + yy
+        if _meta_ok(y):
+            ev.append((y, int(md.group(1)), W_FILE_NAME_MDY, f"Date in file name: {md.group(0)[:8]}"))
+    else:
+        years = {int(y) for y in NAME_YEAR.findall(stem) if _name_ok(int(y))}
+        if len(years) == 1:
+            y = years.pop()
+            mw = MONTH_YEAR.search(stem)
+            ev.append((y, MONTHS[mw.group(1).lower()[:3]] if mw and int(mw.group(2)) == y else None, W_NAME_YEAR,
+                       f"Year in file name: “{m['name']}”"))
+    return ev
+
+
+def _segment_year(seg):
+    """(year, month or None) written in one folder name, if it names exactly one year."""
+    years = {int(y) for y in YEAR_WORD.findall(seg) if _name_ok(int(y))}
+    if len(years) != 1:
+        return None
+    y = years.pop()
+    mw = MONTH_YEAR.search(seg)
+    return y, (MONTHS[mw.group(1).lower()[:3]] if mw and int(mw.group(2)) == y else None)
+
+
+def _evidence(m, rel_parts, yi, siblings):
+    """[(year, month or None, weight, label)] for one media row inside a year folder.
+    siblings: Counter of metadata years of the other files in the same folder."""
+    folder_year = int(rel_parts[yi])
+    ev = _own_evidence(m, folder_year)
     # event folders below the year (and month) folder, e.g. 2019/11/Birthday Nov 2011
     below = rel_parts[yi + 1:]
     if below and MONTH_SEG.match(below[0]):
         below = below[1:]
     for seg in reversed(below):
-        years = {int(y) for y in YEAR_WORD.findall(seg) if ok(int(y))}
-        if len(years) == 1:
-            y = years.pop()
-            mw = MONTH_WORD.search(seg)
-            ev.append((y, MONTHS[mw.group(1).lower()[:3]] if mw else None, W_FOLDER_NAME,
-                       f"Year in folder name: “{seg}”"))
+        sy = _segment_year(seg)
+        if sy:
+            ev.append((sy[0], sy[1], W_FOLDER_NAME, f"Year in folder name: “{seg}”"))
             break
     if not m["meta_date"] and sum(siblings.values()) >= 3:
         top, n = siblings.most_common(1)[0]
@@ -182,7 +244,7 @@ def _evidence(m, rel_parts, yi, siblings):
             ev.append((top, None, W_SIBLINGS, f"{n} of {total} other dated files in this folder are from {top}"))
     if m["mtime"]:
         d = datetime.fromtimestamp(m["mtime"])
-        if ok(d.year):
+        if _meta_ok(d.year):
             ev.append((d.year, d.month, W_MODIFIED, f"File last modified: {_fmt(m['mtime'])}"))
     return ev
 
@@ -196,10 +258,22 @@ def _support(ev, year):
     return 1 - miss
 
 
+def _level(confidence):
+    return "high" if confidence >= HIGH else "medium" if confidence >= MEDIUM else "low"
+
+
+def _strong_year(m):
+    """The year the file's own (trustworthy) metadata gives, for counting what the rest of a folder says."""
+    if m["meta_date"] and (m["meta_src"] or "camera") in ("camera", "video", "screen", "device"):
+        return datetime.fromtimestamp(m["meta_date"]).year
+    return None
+
+
 def folder_years(conn, folder):
     """Counter of metadata years of the files in one folder."""
-    return Counter(datetime.fromtimestamp(r[0]).year for r in conn.execute(
-        "SELECT meta_date FROM media WHERE folder=? AND missing=0 AND meta_date IS NOT NULL", (folder,)))
+    return Counter(y for r in conn.execute(
+        "SELECT meta_date, meta_src FROM media WHERE folder=? AND missing=0 AND meta_date IS NOT NULL", (folder,))
+        if (y := _strong_year(r)))
 
 
 def analyze(m, roots, folder_counts=None):
@@ -215,7 +289,7 @@ def analyze(m, roots, folder_counts=None):
     yi, folder_year = yf
     parts = rel.split("/")
     counts = Counter(folder_counts if folder_counts is not None else folder_years(db(), m["folder"]))
-    own = datetime.fromtimestamp(m["meta_date"]).year if m["meta_date"] else None
+    own = _strong_year(m)
     if own is not None and counts[own] > 0:
         counts[own] -= 1  # the other files, not this one
     ev = _evidence(m, parts, yi, counts)
@@ -237,7 +311,7 @@ def analyze(m, roots, folder_counts=None):
                    f"so the whole folder may be in the wrong place."
     return {
         "id": m["id"], "folder_year": folder_year, "note": note, "year": best, "confidence": round(confidence, 3),
-        "level": "high" if confidence >= HIGH else "medium" if confidence >= MEDIUM else "low",
+        "level": _level(confidence),
         "evidence": [{"label": e[3], "year": e[0], "weight": e[2], "agrees": e[0] == best}
                      for e in sorted(ev, key=lambda e: -e[2])],
         "target": target_folder(root, parts, yi, best, month),
@@ -257,19 +331,280 @@ def target_folder(root, parts, yi, year, month):
     return os.path.join(root, *new, *rest)
 
 
+# ---------------------------------------------------------------- whole folders
+
+FOLDER_SAMPLE = 6  # thumbnails shown per folder suggestion
+
+
+def _year_layouts(rows, roots):
+    """{root: (base folder that holds the year folders, uses month folders?)} - the layout most files follow."""
+    bases = {}
+    for r in rows:
+        rt = root_of(r["folder"], roots)
+        rel = os.path.relpath(r["folder"], rt) if rt else "."
+        yf = year_folder(rel) if rel != "." else None
+        if not yf:
+            continue
+        parts = rel.split("/")
+        base = os.path.join(rt, *parts[:yi]) if (yi := yf[0]) else rt
+        monthly = len(parts) > yi + 1 and bool(MONTH_SEG.match(parts[yi + 1]))
+        c = bases.setdefault(rt, {}).setdefault(base, [0, 0])
+        c[0] += 1
+        c[1] += monthly
+    out = {}
+    for rt, by_base in bases.items():
+        base, (n, monthly) = max(by_base.items(), key=lambda kv: kv[1][0])
+        out[rt] = (base, monthly > n / 2)
+    return out
+
+
+def _year_guess(files, name_ev, era=None):
+    """Best (year, month, confidence, evidence labels, years seen) for a set of files that belong together.
+    name_ev: [(year, month, weight, label)] from folder names. era: (first, last) year range a folder name allows."""
+    votes, months, kinds, n_dated = Counter(), {}, Counter(), 0
+    for m in files:
+        ev = _own_evidence(m, era[0] if era else None)
+        if not ev:
+            continue
+        y, mo, w, label = max(ev, key=lambda e: e[2])
+        if era and not era[0] <= y <= era[1]:
+            w = min(w, W_SCANNED)  # a date outside the decade the folder names: when it was scanned or copied
+        votes[y] += w
+        n_dated += 1
+        if mo:
+            months.setdefault(y, Counter())[mo] += 1
+        kinds[label.split(":")[0]] += 1
+    labels, support = [], {}
+    total = sum(votes.values())
+    for y, v in votes.items():
+        share = v / total
+        support[y] = share * (1 - 0.5 ** v)  # more agreeing files -> surer, up to the share that agrees
+    if votes:
+        top = votes.most_common(4)
+        n = len(files)
+        kinds_txt = " / ".join(k.lower() for k, _ in kinds.most_common(2))
+        if len(votes) == 1:
+            labels.append((top[0][0], f"{n_dated} of {n} files have a date from {top[0][0]} ({kinds_txt})"))
+        else:
+            spread = ", ".join(f"{y} ({sum(1 for m in files if _file_year(m, era) == y)})" for y, _ in top)
+            labels.append((top[0][0], f"{n_dated} of {n} files have dates ({kinds_txt}), from several years: {spread}"
+                                     f"{' …' if len(votes) > 4 else ''}"))
+    for y, mo, w, label in name_ev:
+        support[y] = 1 - (1 - support.get(y, 0.0)) * (1 - w)
+        labels.append((y, label))
+        if mo:
+            months.setdefault(y, Counter())[mo] += 3
+    mtime_only = False
+    if not support:
+        mt = Counter(datetime.fromtimestamp(m["mtime"]).year for m in files if m["mtime"])
+        if mt:
+            y, c = mt.most_common(1)[0]
+            support[y] = W_MODIFIED * c / sum(mt.values())
+            labels.append((y, f"No dates in the files or folder name; {c} of {len(files)} files were last changed in {y} "
+                              f"(often just when they were copied)"))
+            mtime_only = True
+    if not support:
+        return None
+    ranked = sorted(support.items(), key=lambda kv: -kv[1])
+    best, s = ranked[0]
+    runner = ranked[1][1] if len(ranked) > 1 else 0.0
+    confidence = s * (1 - runner)
+    month = months[best].most_common(1)[0][0] if best in months else None
+    if era and not era[0] <= best <= era[1]:
+        confidence *= 0.5
+    return {"year": best, "month": month, "confidence": round(confidence, 3), "mtime_only": mtime_only,
+            "evidence": [{"label": t, "year": y, "agrees": y == best} for y, t in labels],
+            "years": sorted(votes)}
+
+
+def _sort_year(m, era=None):
+    """The year a file can be sorted into on its own: only from trustworthy evidence (camera, file name date)."""
+    ev = [e for e in _own_evidence(m, era[0] if era else None) if e[2] >= W_FILE_NAME_MDY]
+    return max(ev, key=lambda e: e[2])[0] if ev else None
+
+
+def _sort_month(m):
+    ev = [e for e in _own_evidence(m) if e[2] >= W_FILE_NAME_MDY and e[1]]
+    return max(ev, key=lambda e: e[2])[1] if ev else None
+
+
+def _file_year(m, era=None):
+    ev = _own_evidence(m, era[0] if era else None)
+    return max(ev, key=lambda e: e[2])[0] if ev else None
+
+
+def _folder_name_evidence(segs):
+    """Year (or decade / year range) evidence from folder names, deepest first.
+    Returns (name evidence list, era range or None)."""
+    for seg in reversed(segs):
+        sy = _segment_year(seg)
+        if sy:
+            return [(sy[0], sy[1], W_FOLDER_NAME, f"Year in folder name: “{seg}”")], None
+        years = sorted({int(y) for y in YEAR_WORD.findall(seg) if _name_ok(int(y))})
+        if len(years) == 2 and years[1] - years[0] <= 20:
+            return [], (years[0], years[1])
+        dec = DECADE_WORD.search(seg)
+        if dec:
+            d = int(dec.group(1)) * 10
+            return [], (d, d + 9)
+    return [], None
+
+
+def _outside_units(rows, roots):
+    """Folders that are not inside a year folder, as {folder: [rows of it and its subfolders]}.
+    A folder that holds year folders (like PhotoSync or the root itself) is a container, not a unit, and a
+    subfolder belongs to the nearest ancestor that has pictures of its own."""
+    direct = {}
+    for r in rows:
+        direct.setdefault(r["folder"], []).append(r)
+    rels = {}
+    for f in direct:
+        rt = root_of(f, roots)
+        if rt:
+            rels[f] = (rt, os.path.relpath(f, rt))
+    containers = set()
+    for f, (rt, rel) in rels.items():
+        yf = year_folder(rel) if rel != "." else None
+        if yf:  # every folder above a year segment holds year folders
+            parts = rel.split("/")
+            containers.add(rt)
+            for i in range(1, yf[0] + 1):
+                containers.add(os.path.join(rt, *parts[:i]))
+    units = {}
+    for f in sorted(rels, key=len):
+        rt, rel = rels[f]
+        if rel == "." or f in containers or year_folder(rel):
+            continue
+        parent = next((u for u in units if f.startswith(u + "/")), None)
+        if parent:
+            units[parent].extend(direct[f])
+        else:
+            units[f] = list(direct[f])
+    return units, containers
+
+
+def _rename_label(seg, new_year, new_month):
+    """Folder name with its year (and month) words changed, keeping the way the month was written."""
+    def month_word(old, mo):
+        full = MONTH_NAMES[mo - 1]
+        if old.lower() == "sept":
+            w = "sept" if mo == 9 else full[:3]
+        elif len(old) == 3:
+            w = full[:3]
+        else:
+            w = full
+        return w.upper() if old.isupper() else w.capitalize() if old[0].isupper() else w
+
+    def repl(mt):
+        mo = new_month or MONTHS[mt.group(1).lower()[:3]]
+        return mt.group(0).replace(mt.group(1), month_word(mt.group(1), mo), 1).replace(mt.group(2), str(new_year))
+    if MONTH_YEAR.search(seg):
+        return MONTH_YEAR.sub(repl, seg, count=1)
+    return YEAR_WORD.sub(str(new_year), seg, count=1)
+
+
+def analyze_folders(rows, roots):
+    """Folder-level suggestions:
+    - outside: a folder with no year folder above it: best guess of its year, and where it would go
+    - name: an event folder whose name gives a year or month that its photos disagree with"""
+    out = []
+    units, containers = _outside_units(rows, roots)
+    layouts = _year_layouts(rows, roots)
+    for folder, files in units.items():
+        rt = root_of(folder, roots)
+        segs = os.path.relpath(folder, rt).split("/")
+        name_ev, era = _folder_name_evidence(segs)
+        g = _year_guess(files, name_ev, era)
+        sample = [m["id"] for m in sorted(files, key=lambda m: (m["kind"] != "image", m["name"]))[:FOLDER_SAMPLE]]
+        item = {"kind": "outside", "path": folder, "count": len(files), "sample": sample,
+                "has_subfolders": any(m["folder"] != folder for m in files)}
+        if era:
+            item["era"] = f"{era[0]}–{era[1]}"
+        if not g:
+            out.append(dict(item, year=None, confidence=0, level="none",
+                            evidence=[{"label": "No dates in the files, their names or the folder name", "year": None,
+                                       "agrees": False}]))
+            continue
+        base, monthly = layouts.get(rt, (rt, False))
+        parts = [base, str(g["year"])]
+        if monthly and g["month"]:
+            parts.append(f"{g['month']:02d}")
+        target = os.path.join(*parts, os.path.basename(folder))
+        item.update(year=g["year"], confidence=g["confidence"], level=_level(g["confidence"]),
+                    evidence=g["evidence"], years=g["years"], target=target, mtime_only=g["mtime_only"])
+        # a dump of many years (a phone's camera roll, an iCloud export): sort each file by its own date instead
+        split = Counter(y for m in files if (y := _sort_year(m, era)))
+        if len(split) >= 2 and split.most_common(1)[0][1] / len(files) < 0.7 and not name_ev:
+            item.update(kind="split", split=sorted(split.items()), undated=len(files) - sum(split.values()),
+                        target=os.path.join(base, "<year>", os.path.basename(folder)))
+        out.append(item)
+    # event folders inside year folders whose names disagree with their photos
+    by_folder = {}
+    for r in rows:
+        by_folder.setdefault(r["folder"], []).append(r)
+    for folder, files in by_folder.items():
+        rt = root_of(folder, roots)
+        rel = os.path.relpath(folder, rt) if rt else "."
+        yf = year_folder(rel) if rel != "." else None
+        if not yf:
+            continue
+        parts = rel.split("/")
+        below = parts[yf[0] + 1:]
+        if below and MONTH_SEG.match(below[0]):
+            below = below[1:]
+        if not below:
+            continue
+        seg = below[-1]
+        sy = _segment_year(seg)
+        if not sy:
+            continue
+        dated = [datetime.fromtimestamp(m["meta_date"]) for m in files
+                 if m["meta_date"] and (m["meta_src"] or "camera") in ("camera", "video", "device")]
+        if len(dated) < 3:
+            continue
+        (y, n_y), = Counter(d.year for d in dated).most_common(1)
+        months = Counter(d.month for d in dated if d.year == y)
+        mo, n_mo = months.most_common(1)[0]
+        share_y, share_mo = n_y / len(dated), n_mo / len(dated)
+        new_year, new_month, why = sy[0], sy[1], []
+        if y != sy[0] and share_y >= 0.8:
+            new_year = y
+            why.append(f"{n_y} of {len(dated)} camera dates are from {y}, but the name says {sy[0]}")
+        if sy[1] and share_mo >= 0.8 and mo != sy[1]:
+            new_month = mo
+            why.append(f"{n_mo} of {len(dated)} camera dates are in {MONTH_NAMES[mo - 1].capitalize()} {y}, "
+                       f"but the name says {MONTH_NAMES[sy[1] - 1].capitalize()}")
+        if not why:
+            continue
+        new_seg = _rename_label(seg, new_year, new_month if sy[1] else None)
+        if new_seg == seg:
+            continue
+        share = share_y if new_year != sy[0] else share_mo
+        confidence = round(share * (1 - 0.5 ** len(dated)), 3)
+        out.append({"kind": "name", "path": folder, "count": len(files), "year": new_year, "name_year": sy[0],
+                    "confidence": confidence, "level": _level(confidence),
+                    "evidence": [{"label": t, "year": new_year, "agrees": True} for t in why] +
+                                [{"label": f"Folder name: “{seg}”", "year": sy[0], "agrees": False}],
+                    "target": os.path.join(os.path.dirname(folder), new_seg), "new_name": new_seg,
+                    "sample": [m["id"] for m in sorted(files, key=lambda m: m["name"])[:FOLDER_SAMPLE]]})
+    out.sort(key=lambda f: (f["kind"] == "name", -f["confidence"], f["path"]))
+    return out
+
+
 def _read_missing_meta(job, rows):
     """Read dates from the headers of files whose metadata has not been read yet."""
     from imaging import read_meta_date
-    todo = [r for r in rows if not r["meta_read"]]
+    # a date with no recorded source was read by an older version: read it again to learn where it came from
+    todo = [r for r in rows if not r["meta_read"] or (r["meta_date"] and r["meta_src"] is None and r["kind"] == "image")]
     conn = db()
     for i, r in enumerate(todo):
         if i % 20 == 0:
             job.step("Reading photo dates", i, len(todo))
         try:
-            d = read_meta_date(r["path"], r["kind"])
+            d, src = read_meta_date(r["path"], r["kind"])
         except Exception:
-            d = None
-        conn.execute("UPDATE media SET meta_date=?, meta_read=1 WHERE id=?", (d, r["id"]))
+            d, src = None, None
+        conn.execute("UPDATE media SET meta_date=?, meta_src=?, meta_read=1 WHERE id=?", (d, src, r["id"]))
     return len(todo)
 
 
@@ -277,21 +612,25 @@ def run_year_check(job):
     roots = lib.load_config()["roots"]
     conn = db()
 
-    def in_year_folders():
-        return [r for r in conn.execute("SELECT id, path, folder, name, kind, mtime, meta_date, meta_read "
-                                        "FROM media WHERE missing=0")
-                if (rt := root_of(r["folder"], roots)) and year_folder(os.path.relpath(r["folder"], rt))]
-    rows = in_year_folders()
+    def in_roots():
+        return [r for r in conn.execute("SELECT id, path, folder, name, kind, mtime, meta_date, meta_src, meta_read "
+                                        "FROM media WHERE missing=0") if root_of(r["folder"], roots)]
+    rows = in_roots()
     if _read_missing_meta(job, rows):
-        rows = in_year_folders()
+        rows = in_roots()
     job.step("Comparing dates with folders", 0, len(rows))
+    in_years = [r for r in rows if (rel := os.path.relpath(r["folder"], root_of(r["folder"], roots))) != "."
+                and year_folder(rel)]
     by_folder = {}
-    for r in rows:
-        if r["meta_date"]:
-            by_folder.setdefault(r["folder"], Counter())[datetime.fromtimestamp(r["meta_date"]).year] += 1
-    found = [a for r in rows if (a := analyze(r, roots, by_folder.get(r["folder"], Counter())))]
+    for r in in_years:
+        if (y := _strong_year(r)):
+            by_folder.setdefault(r["folder"], Counter())[y] += 1
+    found = [a for r in in_years if (a := analyze(r, roots, by_folder.get(r["folder"], Counter())))]
     found.sort(key=lambda a: (-a["confidence"], a["rel"]))
-    return {"items": found, "checked": len(rows)}
+    job.step("Guessing years for folders", 0, 0)
+    folders = analyze_folders(rows, roots)
+    return {"items": found, "checked": len(in_years), "folders": folders,
+            "outside_files": sum(f["count"] for f in folders if f["kind"] == "outside")}
 
 
 def move_to_year(ids):
@@ -321,6 +660,104 @@ def move_to_year(ids):
     finally:
         lib.fs_lock.release()
     _forget(year_job, {o["id"] for o in out if o["ok"]})
+    return out
+
+
+def _move_folder_rows(conn, old, new):
+    """Point every media row in folder `old` (and its subfolders) at `new`."""
+    n = len(old)
+    conn.execute("BEGIN")
+    # stale rows for files that used to be at the destination would block the UNIQUE path
+    conn.execute("DELETE FROM media WHERE missing=1 AND (folder=? OR substr(folder, 1, ?)=?)", (new, len(new) + 1, new + "/"))
+    conn.execute("""UPDATE media SET path = ? || substr(path, ?), folder = ? || substr(folder, ?)
+                    WHERE folder=? OR substr(folder, 1, ?)=?""",
+                 (new, n + 1, new, n + 1, old, n + 1, old + "/"))
+    conn.execute("COMMIT")
+
+
+def _split_folder(conn, folder, roots):
+    """Move each dated file of a many-year folder to <year folder base>/<year>[/<month>]/<folder name>/<subfolders>.
+    Files without a trustworthy date stay. Returns (files moved, files left)."""
+    rt = root_of(folder, roots)
+    rows = conn.execute("SELECT * FROM media WHERE missing=0 AND (folder=? OR substr(folder, 1, ?)=?)",
+                        (folder, len(folder) + 1, folder + "/")).fetchall()
+    every = conn.execute("SELECT folder FROM media WHERE missing=0").fetchall()
+    base, monthly = _year_layouts(every, roots).get(rt, (rt, False))
+    moved = kept = 0
+    for m in rows:
+        y = _sort_year(m)
+        if not y or not os.path.exists(m["path"]):
+            kept += 1
+            continue
+        parts = [base, str(y)]
+        if monthly and (mo := _sort_month(m)):
+            parts.append(f"{mo:02d}")
+        sub = os.path.relpath(m["folder"], folder)
+        dest_dir = os.path.normpath(os.path.join(*parts, os.path.basename(folder), sub))
+        _set_path(conn, m["id"], _move_file(m["path"], dest_dir))
+        _remove_empty_dirs(m["folder"], rt)
+        moved += 1
+    return moved, kept
+
+
+def apply_folders(paths):
+    """Move (outside a year folder) or rename (name disagrees with its photos) whole folders, as the last
+    year check suggested. Returns [{path, ok, new|error}]."""
+    res = year_job.result
+    if not res:
+        raise ValueError("Run the year check first")
+    by_path = {f["path"]: f for f in res.get("folders", [])}
+    roots = lib.load_config()["roots"]
+    conn = db()
+    out, done = [], []
+    _acquire_fs()
+    try:
+        for p in paths:
+            f = by_path.get(p)
+            if not f or not f.get("target"):
+                out.append({"path": p, "ok": False, "error": "No suggestion for this folder"})
+                continue
+            if any(p.startswith(d + "/") or d.startswith(p + "/") for d, _ in done):
+                out.append({"path": p, "ok": False, "error": "A folder around it was just moved: check again"})
+                continue
+            if f["kind"] == "split":
+                try:
+                    n, kept = _split_folder(conn, p, roots)
+                    done.append((p, p))
+                    out.append({"path": p, "ok": True, "new": None, "moved": n, "kept": kept})
+                except Exception as e:
+                    out.append({"path": p, "ok": False, "error": str(e)})
+                continue
+            try:
+                if not os.path.isdir(p):
+                    raise FileNotFoundError("The folder is no longer there")
+                dest = _free_path(f["target"])
+                if dest.startswith(p + "/"):
+                    raise ValueError("Cannot move a folder into itself")
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                try:
+                    os.rename(p, dest)
+                except OSError:
+                    shutil.move(p, dest)
+                _move_folder_rows(conn, p, dest)
+                rt = root_of(p, roots)
+                if rt:
+                    _remove_empty_dirs(os.path.dirname(p), rt)
+                done.append((p, dest))
+                out.append({"path": p, "ok": True, "new": dest})
+            except Exception as e:
+                out.append({"path": p, "ok": False, "error": str(e)})
+    finally:
+        lib.fs_lock.release()
+    # suggestions in or around the moved folders are stale now
+    if done:
+        under = lambda f, d: f == d or f.startswith(d + "/")  # noqa: E731
+        res["folders"] = [f for f in res["folders"] if not any(under(f["path"], d) for d, _ in done)]
+        moved = set()
+        for _, new in done:
+            moved |= {r[0] for r in conn.execute("SELECT id FROM media WHERE folder=? OR substr(folder, 1, ?)=?",
+                                                 (new, len(new) + 1, new + "/"))}
+        res["items"] = [a for a in res["items"] if a["id"] not in moved]
     return out
 
 
@@ -457,8 +894,11 @@ def run_duplicates(job):
     return {"groups": out}
 
 
-def _trash_dir(root):
-    return os.path.join(root, ".removed-duplicates")  # starts with "." so the indexer skips it
+TRASH = {"duplicate": ".removed-duplicates", "junk": ".removed-junk"}  # "." so the indexer skips them
+
+
+def _trash_dir(root, reason):
+    return os.path.join(root, TRASH[reason])
 
 
 def remove_duplicates(ids):
@@ -474,6 +914,13 @@ def remove_duplicates(ids):
             raise ValueError("That file is not in the current list of duplicates")
         if all(it["id"] in ids for it in g["items"]):
             raise ValueError("Keep at least one file from each group")
+    out = move_to_holding(ids, "duplicate")
+    _forget(dup_job, {o["id"] for o in out if o["ok"]})
+    return out
+
+
+def move_to_holding(ids, reason):
+    """Move files into the hidden holding folder (per reason) of their root, so they can be put back."""
     roots = lib.load_config()["roots"]
     conn = db()
     out = []
@@ -487,32 +934,31 @@ def remove_duplicates(ids):
                 continue
             try:
                 rel = os.path.relpath(m["folder"], root)
-                dest = _move_file(m["path"], os.path.normpath(os.path.join(_trash_dir(root), rel)))
+                dest = _move_file(m["path"], os.path.normpath(os.path.join(_trash_dir(root, reason), rel)))
                 conn.execute("UPDATE media SET missing=1 WHERE id=?", (mid,))
-                conn.execute("INSERT INTO removed(media_id, orig_path, trash_path, size, removed) VALUES(?,?,?,?,?)",
-                             (mid, m["path"], dest, m["size"], time.time()))
+                conn.execute("INSERT INTO removed(media_id, orig_path, trash_path, size, removed, reason) "
+                             "VALUES(?,?,?,?,?,?)", (mid, m["path"], dest, m["size"], time.time(), reason))
                 out.append({"id": mid, "ok": True})
             except Exception as e:
                 out.append({"id": mid, "ok": False, "error": str(e)})
     finally:
         lib.fs_lock.release()
-    _forget(dup_job, {o["id"] for o in out if o["ok"]})
     state.clip_version += 1
     return out
 
 
-def removed_summary():
-    r = db().execute("SELECT COUNT(*) n, COALESCE(SUM(size), 0) bytes FROM removed").fetchone()
+def removed_summary(reason="duplicate"):
+    r = db().execute("SELECT COUNT(*) n, COALESCE(SUM(size), 0) bytes FROM removed WHERE reason=?", (reason,)).fetchone()
     return {"count": r["n"], "bytes": r["bytes"]}
 
 
-def restore_removed():
-    """Put every removed duplicate back where it was."""
+def restore_removed(reason="duplicate"):
+    """Put every file the tool for `reason` removed back where it was."""
     conn = db()
     restored, failed = 0, []
     _acquire_fs()
     try:
-        for r in conn.execute("SELECT * FROM removed").fetchall():
+        for r in conn.execute("SELECT * FROM removed WHERE reason=?", (reason,)).fetchall():
             if not os.path.exists(r["trash_path"]):
                 conn.execute("DELETE FROM removed WHERE id=?", (r["id"],))
                 continue
@@ -531,22 +977,23 @@ def restore_removed():
     finally:
         lib.fs_lock.release()
     state.clip_version += 1
-    dup_job.result = None  # groups changed; the list must be rebuilt
+    if reason == "duplicate":
+        dup_job.result = None  # groups changed; the list must be rebuilt
     return {"restored": restored, "failed": failed}
 
 
-def empty_removed():
-    """Permanently delete every removed duplicate."""
+def empty_removed(reason="duplicate"):
+    """Permanently delete every file the tool for `reason` removed."""
     conn = db()
     deleted = 0
-    for r in conn.execute("SELECT * FROM removed").fetchall():
+    for r in conn.execute("SELECT * FROM removed WHERE reason=?", (reason,)).fetchall():
         try:
             os.remove(r["trash_path"])
             deleted += 1
         except FileNotFoundError:
             pass
         except OSError as e:
-            print(f"[duplicates] cannot delete {r['trash_path']}: {e}")
+            print(f"[tidy] cannot delete {r['trash_path']}: {e}")
             continue
         conn.execute("DELETE FROM removed WHERE id=?", (r["id"],))
         conn.execute("DELETE FROM media WHERE id=? AND missing=1", (r["media_id"],))
@@ -556,9 +1003,9 @@ def empty_removed():
 
 
 def _trash_root(trash_path):
-    """The .removed-duplicates folder that holds trash_path (removed too once it is empty)."""
+    """The hidden holding folder that holds trash_path (removed too once it is empty)."""
     head = trash_path
-    while os.path.basename(head) != ".removed-duplicates" and head != os.path.dirname(head):
+    while os.path.basename(head) not in TRASH.values() and head != os.path.dirname(head):
         head = os.path.dirname(head)
     return head
 

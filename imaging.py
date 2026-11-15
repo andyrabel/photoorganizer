@@ -172,9 +172,11 @@ def dhash_pil(im):
 
 
 def read_meta_date(path, kind):
-    """The capture date stored in the file (EXIF or QuickTime/MP4 header), or None. Reads headers only."""
+    """(date stored in the file, its source) from the EXIF or QuickTime/MP4 header, or (None, None).
+    Reads headers only. See library.parse_exif_date for the sources."""
     if kind == "video":
-        return mp4_creation_time(path)
+        ts = mp4_creation_time(path)
+        return ts, "video" if ts else None
     from library import parse_exif_date
     with Image.open(path) as im:
         return parse_exif_date(im.getexif())

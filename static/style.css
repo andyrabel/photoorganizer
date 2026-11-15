@@ -81,8 +81,15 @@ code { background: #eee; padding: 0 4px; border-radius: 3px; }
 .person.unknown.sel .label { color: #fff; }
 .subhead { font-size: 12px; color: var(--muted); padding: 8px 10px 2px; display: flex; align-items: center; gap: 8px; }
 .subhead::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
-.year { font-size: 15px; color: #555; padding: 8px 10px 2px; display: flex; align-items: center; gap: 10px; }
+.year { font-size: 15px; color: #555; padding: 8px 10px 2px; display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
 .year::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.year:hover { color: var(--accent); }
+.year .n { font-size: 11px; color: var(--muted); order: 2; }
+.year::after { order: 1; }
+.ytri { width: 0; height: 0; border: 5px solid transparent; border-top: 6px solid #777; border-bottom: 0; flex: none; }
+.year.shut .ytri { border: 5px solid transparent; border-left: 6px solid #777; border-right: 0; }
+.ytools { display: flex; gap: 4px; padding: 6px 8px 2px; align-items: center; }
+.ytools button, .ytools select { font-size: 11px; padding: 1px 6px; }
 .folder-ico { width: 20px; height: 16px; flex: none; }
 .hint { padding: 8px 14px; color: var(--muted); font-size: 12px; }
 
@@ -270,3 +277,33 @@ button.danger-btn:not(:disabled):hover { border-color: var(--bad); background: l
 .dmeta { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .keep-word { color: var(--ok); font-weight: 600; }
 .rm-word { color: var(--bad); font-weight: 600; }
+
+/* ---------- year check: whole folders ---------- */
+.fbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 12px; margin-bottom: 10px; background: #f6f9fd; border: 1px solid var(--accent-soft); border-radius: 6px; font-size: 13px; }
+.fsub { margin: 18px 0 8px; font-size: 14px; }
+.frow { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #f0f0f0; }
+.fsec .yghead + .frow { border-top: 0; }
+.fthumbs { display: grid; grid-template-columns: repeat(3, 40px); grid-auto-rows: 40px; gap: 2px; flex: none; width: 124px; }
+.fthumbs img { width: 40px; height: 40px; object-fit: cover; border-radius: 2px; background: #eee; cursor: zoom-in; }
+.frow .yname { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.frow .yname a { color: var(--text); font-weight: 600; text-decoration: none; word-break: break-all; }
+.frow .yname a:hover { color: var(--accent); text-decoration: underline; }
+.faction { margin-top: 4px; font-size: 12px; }
+.faction .yto { color: var(--ok); word-break: break-all; }
+.fguess .yr { font-size: 22px; }
+.conf.none { color: #666; background: #f6f6f6; border-color: #ddd; }
+
+/* ---------- junk finder ---------- */
+.jcats { flex-wrap: wrap; }
+.jcats button { padding: 3px 10px; font-size: 13px; }
+.extra-head .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+.jtiles { display: flex; flex-wrap: wrap; gap: 12px; }
+.jtile { width: calc(var(--thumb) + 10px); cursor: pointer; padding: 5px; border-radius: 5px; border: 2px solid transparent; user-select: none; content-visibility: auto; contain-intrinsic-size: auto 250px; }
+.jtile:hover { background: #f4f7fb; }
+.jtile.on { border-color: #e6a39b; background: #fdf1ef; }
+.jtile.on img { opacity: .55; }
+.jtile.book { border-color: #b9d7f2; background: #f2f8fe; }
+.jtile .dimg { position: relative; }
+.jcheck { position: absolute; top: 5px; left: 5px; width: 20px; height: 20px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.25); color: #fff; font-size: 13px; line-height: 17px; text-align: center; box-shadow: 0 0 2px rgba(0,0,0,.5); }
+.jtile.on .jcheck { background: var(--bad); }
+.jbook { position: absolute; bottom: 5px; right: 5px; font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--accent); color: #fff; }

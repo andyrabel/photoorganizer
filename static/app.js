@@ -40,7 +40,7 @@ function fmtDate(ts, opts = { month: 'short', day: 'numeric', year: 'numeric' })
 
 // ------------------------------------------------------------------ state
 const S = {
-  mode: null,         // 'folder' | 'person' | 'unknown' | 'search' | 'years' | 'dupes'
+  mode: null,         // 'folder' | 'person' | 'unknown' | 'search' | 'years' | 'dupes' | 'junk'
   kind: 'all',        // show 'all', only 'image' (photos) or only 'video'
   folder: null, personId: null, clusterId: null, query: '',
   searchIndex: null,  // {enabled, done, total} for describe-a-photo search
@@ -128,16 +128,40 @@ function renderFolders() {
     byYear.get(y).push(f);
   }
   const years = [...byYear.keys()].sort((a, b) => (b === 'Undated') - (a === 'Undated') || b - a);
-  let html = '';
+  // a year can be collapsed to its heading; while the filter box is in use every match is shown
+  const shut = new Set(store.get('shutYears', []));
+  const open = y => q || !shut.has(String(y));
+  let html = `<div class="ytools"><button data-yall="open" title="Show the folders of every year">Expand all</button><button data-yall="shut" title="Show only the year headings">Collapse all</button>
+    <select id="yJump" title="Jump to a year"><option value="">Jump to…</option>${years.map(y => `<option>${y}</option>`).join('')}</select></div>`;
   for (const y of years) {
-    html += `<div class="year">${y}</div>`;
-    for (const f of byYear.get(y).sort((a, b) => folderSortKey(b).localeCompare(folderSortKey(a))))
+    const list = byYear.get(y), isOpen = open(y);
+    const n = list.reduce((t, f) => t + kindCount(f), 0);
+    html += `<div class="year${isOpen ? '' : ' shut'}" data-year="${y}" title="${isOpen ? 'Collapse' : 'Expand'} ${y}"><span class="ytri"></span>${y} <span class="n">${plural(list.length, 'folder')} · ${n.toLocaleString()}</span></div>`;
+    if (!isOpen) continue;
+    for (const f of list.sort((a, b) => folderSortKey(b).localeCompare(folderSortKey(a))))
       html += `<div class="item folder${S.mode === 'folder' && S.folder === f.path ? ' sel' : ''}" data-path="${esc(f.path)}" title="${esc(f.path)}">${FOLDER_SVG}<span class="label">${esc(folderLabel(f))}</span><span class="n">(${kindCount(f)})</span></div>`;
   }
   el.innerHTML = html;
+  $('#yJump').onchange = e => {
+    const y = e.target.value; if (!y) return;
+    const sh = new Set(store.get('shutYears', [])); sh.delete(y); store.set('shutYears', [...sh]);
+    renderFolders();
+    $(`#folderList .year[data-year="${y}"]`)?.scrollIntoView({ block: 'start' });
+  };
 }
 
 $('#folderList').addEventListener('click', e => {
+  const yt = e.target.closest('.year');
+  if (yt) {
+    const y = yt.dataset.year, sh = new Set(store.get('shutYears', []));
+    if (yt.classList.contains('shut')) sh.delete(y); else sh.add(y);
+    store.set('shutYears', [...sh]); renderFolders(); return;
+  }
+  const all = e.target.dataset.yall;
+  if (all) {
+    const ys = [...$('#folderList').querySelectorAll('.year')].map(x => x.dataset.year);
+    store.set('shutYears', all === 'shut' ? ys : []); renderFolders(); return;
+  }
   const it = e.target.closest('.item'); if (it) openFolder(it.dataset.path);
 });
 
@@ -379,6 +403,7 @@ function setKind(k) {
   if (GRID_MODES.includes(S.mode)) applyFilter();
   else if (S.mode === 'years') renderYears();
   else if (S.mode === 'dupes') renderDupes();
+  else if (S.mode === 'junk') renderJunk();
 }
 $('#kindSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setKind(b.dataset.k); });
 
@@ -921,15 +946,15 @@ const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 
 const plural = (n, w, ws = w + 's') => `${n.toLocaleString()} ${n === 1 ? w : ws}`;
 const relPath = p => { const r = S.roots.find(x => p === x || p.startsWith(x.replace(/\/$/, '') + '/')); return r ? (p.slice(r.length).replace(/^\//, '') || r.split('/').pop()) : p; };
 const kindOk = m => S.kind === 'all' || m.kind === S.kind;
-const T = { years: null, dupes: null, pollTimer: null, limit: 0 };
+const T = { years: null, dupes: null, junk: null, pollTimer: null, limit: 0 };
 const ICON_CAL = '<svg viewBox="0 0 24 24" width="40" height="40"><rect x="3" y="5" width="18" height="16" rx="2" fill="#fff" stroke="#4a7fc1" stroke-width="1.6"/><path d="M3 9h18" stroke="#4a7fc1" stroke-width="1.6"/><path d="M8 3v4M16 3v4" stroke="#4a7fc1" stroke-width="1.6" stroke-linecap="round"/><path d="M8 15.5l2.5 2.5 5-5" fill="none" stroke="#2e8b3e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const ICON_DUP = '<svg viewBox="0 0 24 24" width="40" height="40"><rect x="7.5" y="7.5" width="13" height="13" rx="1.5" fill="#cfe0f4" stroke="#4a7fc1" stroke-width="1.6"/><rect x="3.5" y="3.5" width="13" height="13" rx="1.5" fill="#fff" stroke="#4a7fc1" stroke-width="1.6"/><circle cx="10" cy="10" r="2.6" fill="#4a7fc1"/></svg>';
 
 function enterTool(mode, title, icon, sub) {
   S.mode = mode; S.items = []; S.shown = [];
   selectLeft(); showLibrary();
-  document.querySelectorAll('#btnYears, #btnDupes').forEach(b => b.classList.remove('on'));
-  $(mode === 'years' ? '#btnYears' : '#btnDupes').classList.add('on');
+  document.querySelectorAll('#btnYears, #btnDupes, #btnJunk').forEach(b => b.classList.remove('on'));
+  $({ years: '#btnYears', dupes: '#btnDupes', junk: '#btnJunk' }[mode]).classList.add('on');
   setHeader(`<div class="big-ico tool">${icon}</div><div><h2>${title}</h2><div class="sub" id="toolSub">${sub}</div></div>
     <div class="actions"><button id="toolRerun">Check again</button></div>`);
   $('#libExtra').innerHTML = '';
@@ -937,7 +962,7 @@ function enterTool(mode, title, icon, sub) {
   $('#empty').hidden = true; $('#libInfo').textContent = '';
 }
 function leaveTool() {
-  document.querySelectorAll('#btnYears, #btnDupes').forEach(b => b.classList.remove('on'));
+  document.querySelectorAll('#btnYears, #btnDupes, #btnJunk').forEach(b => b.classList.remove('on'));
   clearTimeout(T.pollTimer);
   const g = $('#grid'); g.onclick = g.ondblclick = g.onchange = null;
 }
@@ -973,29 +998,59 @@ function openYears() {
   runTool('years', '/api/years', false, gotYears);
 }
 function gotYears(d) {
-  T.years = { items: d.items, checked: d.checked, finished: d.finished, level: store.get('yearsLevel', 'medium') };
-  // pre-select the high-confidence suggestions
+  T.years = { items: d.items, folders: d.folders || [], checked: d.checked, finished: d.finished,
+    level: store.get('yearsLevel', 'medium'), fsel: new Set() };
+  // pre-select the high-confidence file moves; folder moves and renames are bigger changes, so you choose them
   T.years.sel = new Set(d.items.filter(a => a.level === 'high').map(a => a.id));
   renderYears();
 }
 const LEVELS = { high: ['high'], medium: ['high', 'medium'], low: ['high', 'medium', 'low'] };
+const pct = c => Math.round(c * 100) + '%';
+const levelBadge = (level, c, title) => `<div class="conf ${level}" title="${title}">${level === 'none' ? 'No guess' : level[0].toUpperCase() + level.slice(1) + ' · ' + pct(c)}</div>`;
+
+function folderRow(f, Y) {
+  const canApply = !!f.target;
+  const ev = f.evidence.map(e => `<li class="${e.agrees ? 'for' : e.year == null ? 'other' : 'against'}">${esc(e.label)}</li>`).join('');
+  const yearsTxt = f.split ? f.split.map(([y, n]) => `${y} (${n})`).join(', ') : '';
+  const action = f.kind === 'name' ? `Rename to <b>${esc(f.new_name)}</b>` :
+    f.kind === 'split' ? `Sort into year folders by each file’s own date, as <span class="yto">${esc(relPath(f.target))}</span>: ${esc(yearsTxt)}` +
+      (f.undated ? ` · <span class="muted">${plural(f.undated, 'file')} with no reliable date stay here</span>` : '') :
+    canApply ? `Move to <span class="yto">${esc(relPath(f.target))}</span>` : '<span class="muted">Leave it where it is until there is more to go on</span>';
+  const guess = f.kind === 'split' ? `<div class="fguess"><span class="yr new">${f.split[0][0]}–${f.split[f.split.length - 1][0]}</span></div>` :
+    f.kind === 'name' ? `<div><span class="yr old">${esc(f.path.split('/').pop())}</span></div>` :
+    f.year ? `<div class="fguess">${f.mtime_only ? '≈ ' : ''}<span class="yr new">${f.year}</span></div>` : '<div class="fguess"><span class="yr old">?</span></div>';
+  return `<div class="frow" data-path="${esc(f.path)}">
+    <input type="checkbox" ${canApply ? '' : 'disabled'} ${Y.fsel.has(f.path) ? 'checked' : ''} aria-label="Apply this suggestion">
+    <div class="fthumbs">${f.sample.map(m => `<img loading="lazy" src="${thumbUrl(m)}" data-fopen="${m.id}" title="${esc(m.name)}">`).join('')}</div>
+    <div class="yinfo"><div class="yname">${FOLDER_SVG} <a href="#" data-folder="${esc(f.path)}" title="Open this folder">${esc(relPath(f.path))}</a>
+        <span class="muted">${plural(f.count, 'file')}${f.has_subfolders ? ' incl. subfolders' : ''}${f.era ? ` · folder name says ${esc(f.era)}` : ''}</span></div>
+      <ul class="ev">${ev}</ul><div class="faction">${action}</div></div>
+    <div class="yverdict">${guess}${f.kind === 'split' ? `<div class="conf medium" title="The files are from several years, so each goes to its own year. Best single guess: ${f.year} (${pct(f.confidence)})">Many years</div>` :
+      levelBadge(f.level, f.confidence, 'How sure the guess is, from how many files agree and how strong their dates are')}</div>
+  </div>`;
+}
+
 function renderYears() {
   const Y = T.years; if (!Y || S.mode !== 'years') return;
   const counts = { high: 0, medium: 0, low: 0 };
   for (const a of Y.items) if (kindOk(a.media)) counts[a.level]++;
   const shown = Y.items.filter(a => kindOk(a.media) && LEVELS[Y.level].includes(a.level));
   for (const id of Y.sel) if (!shown.some(a => a.id === id)) Y.sel.delete(id);
-  $('#toolSub').textContent = `Checked ${plural(Y.checked, 'file')} in year folders · ` +
-    (Y.items.length ? `${plural(Y.items.length, 'file')} may be in the wrong year` : 'everything looks right') +
+  const outside = Y.folders.filter(f => f.kind !== 'name'), named = Y.folders.filter(f => f.kind === 'name');
+  for (const p of Y.fsel) if (!Y.folders.some(f => f.path === p)) Y.fsel.delete(p);
+  $('#toolSub').textContent = `Checked ${plural(Y.checked, 'file')} in year folders` +
+    (outside.length ? ` and ${plural(outside.length, 'folder')} outside them` : '') + ' · ' +
+    (Y.items.length ? `${plural(Y.items.length, 'file')} may be in the wrong year` : 'no files in the wrong year') +
     (Y.finished ? ` · ${new Date(Y.finished * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '');
   $('#libExtra').innerHTML = !Y.items.length ? '' : `<div class="extra-head">
-      <label>Show <select id="yLevel">
+      <label>Show files <select id="yLevel">
         <option value="high">High confidence (${counts.high})</option>
         <option value="medium">High and medium (${counts.high + counts.medium})</option>
         <option value="low">All suggestions (${counts.high + counts.medium + counts.low})</option></select></label>
       <button id="ySelAll">Select all shown</button><button id="ySelNone">Select none</button>
       <button id="yMove" class="primary" ${Y.sel.size ? '' : 'disabled'}>Move ${plural(Y.sel.size, 'selected file')}</button>
     </div><div class="muted">The suggestion comes from the date the camera recorded, any date in the file or folder name, and (weakly) when the file was last changed.
+      Scanner dates and digital dates on pre-digital photos count for little: they say when a print was scanned, not taken.
       Files move to the suggested year folder, keeping any month and event folder below it. People, edits and search results move with them.</div>`;
   if (Y.items.length) {
     $('#yLevel').value = Y.level;
@@ -1004,19 +1059,39 @@ function renderYears() {
     $('#ySelNone').onclick = () => { Y.sel.clear(); renderYears(); };
     $('#yMove').onclick = moveYears;
   }
-  // group by current folder: misfiled photos usually come in batches (a whole event)
+  const grid = $('#grid');
+  let html = '';
+  // whole folders: outside the year folders (best-guess year) and event folders whose name disagrees with their photos
+  if (Y.folders.length) {
+    html += `<div class="fbar"><b>${plural(Y.fsel.size, 'folder change')} selected</b>
+      <button id="fApply" class="primary" ${Y.fsel.size ? '' : 'disabled'}>Apply folder changes</button>
+      <span class="muted">Whole folders (with their subfolders) are moved or renamed on disk. Nothing is deleted.</span></div>`;
+    if (outside.length) {
+      const guessed = outside.filter(f => f.year).length;
+      html += `<section class="ygroup fsec"><div class="yghead"><b>Folders that are not in a year folder</b>
+        <span class="muted">${plural(outside.length, 'folder')} · best guess for ${guessed}</span>
+        <button data-fsel="outside-high" title="Select the folders whose guess is high confidence">Select high-confidence</button></div>
+        ${outside.map(f => folderRow(f, Y)).join('')}</section>`;
+    }
+    if (named.length) {
+      html += `<section class="ygroup fsec"><div class="yghead"><b>Folder names that disagree with their photos</b>
+        <span class="muted">${plural(named.length, 'folder')} · the files are in the right place, but the year or month in the name is not when the photos were taken</span>
+        <button data-fsel="name-all">Select all</button></div>
+        ${named.map(f => folderRow(f, Y)).join('')}</section>`;
+    }
+  }
+  // single files in the wrong year folder, grouped by current folder: misfiled photos usually come in batches
   const groups = new Map();
   for (const a of shown) {
     const k = a.media.folder + '\n' + a.target;
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(a);
   }
-  const grid = $('#grid');
   if (!shown.length) {
-    grid.innerHTML = `<div class="tool-empty">${Y.items.length ? 'No suggestions at this confidence level. Choose “All suggestions” to see weaker ones.' : 'Every photo and video in a year folder (such as …/2021/…) matches its year. 🎉'}</div>`;
-    $('#libInfo').textContent = ''; return;
-  }
-  let html = '', n = 0;
+    html += `<div class="tool-empty">${Y.items.length ? 'No file suggestions at this confidence level. Choose “All suggestions” to see weaker ones.' :
+      'Every photo and video in a year folder (such as …/2021/…) matches its year. 🎉'}</div>`;
+  } else if (Y.folders.length) html += '<h4 class="fsub">Files in the wrong year folder</h4>';
+  let n = 0;
   for (const [, list] of groups) {
     if (n >= T.limit) break;
     const a0 = list[0], allSel = list.every(a => Y.sel.has(a.id));
@@ -1032,26 +1107,60 @@ function renderYears() {
         <div class="yinfo"><div class="yname">${esc(a.media.name)}${a.media.kind === 'video' ? ' <span class="tag">video</span>' : ''}</div>
           <ul class="ev">${a.evidence.map(e => `<li class="${e.agrees ? 'for' : e.year === a.folder_year ? 'against' : 'other'}">${esc(e.label)}</li>`).join('')}</ul></div>
         <div class="yverdict"><div><span class="yr old">${a.folder_year}</span> → <span class="yr new">${a.year}</span></div>
-          <div class="conf ${a.level}" title="How sure the suggestion is, from how strong and consistent the evidence is">${a.level[0].toUpperCase() + a.level.slice(1)} · ${Math.round(a.confidence * 100)}%</div></div>
+          ${levelBadge(a.level, a.confidence, 'How sure the suggestion is, from how strong and consistent the evidence is')}</div>
       </div>`;
     }
     html += '</section>';
   }
   if (n < shown.length) html += `<div class="tool-more"><button id="yMore">Show more (${shown.length - n} left)</button></div>`;
   grid.innerHTML = html;
-  $('#libInfo').textContent = `${plural(shown.length, 'suggestion')} shown · ${Y.sel.size} selected`;
-  const more = $('#yMore'); if (more) more.onclick = () => { T.limit += 200; const st = grid.scrollTop; renderYears(); grid.scrollTop = st; };
+  $('#libInfo').textContent = `${plural(shown.length, 'file suggestion')} shown · ${Y.sel.size} selected` +
+    (Y.folders.length ? ` · ${plural(Y.folders.length, 'folder suggestion')}` : '');
+  const rerender = () => { const st = grid.scrollTop; renderYears(); grid.scrollTop = st; };
+  const more = $('#yMore'); if (more) more.onclick = () => { T.limit += 200; rerender(); };
+  const fa = $('#fApply'); if (fa) fa.onclick = applyFolders;
   grid.onchange = e => {
     const cb = e.target; if (cb.type !== 'checkbox') return;
-    if (cb.dataset.group != null) { for (const a of shown) if (a.media.folder + '\n' + a.target === cb.dataset.group) cb.checked ? Y.sel.add(a.id) : Y.sel.delete(a.id); }
+    const fr = cb.closest('.frow');
+    if (fr) { cb.checked ? Y.fsel.add(fr.dataset.path) : Y.fsel.delete(fr.dataset.path); }
+    else if (cb.dataset.group != null) { for (const a of shown) if (a.media.folder + '\n' + a.target === cb.dataset.group) cb.checked ? Y.sel.add(a.id) : Y.sel.delete(a.id); }
     else { const id = +cb.closest('.yrow').dataset.id; cb.checked ? Y.sel.add(id) : Y.sel.delete(id); }
-    const st = grid.scrollTop; renderYears(); grid.scrollTop = st;
+    rerender();
   };
   grid.onclick = e => {
+    const fs = e.target.dataset.fsel;
+    if (fs) {
+      for (const f of Y.folders) if (f.target && (fs === 'name-all' ? f.kind === 'name' : f.kind === 'outside' && f.level === 'high')) Y.fsel.add(f.path);
+      return rerender();
+    }
+    const fo = e.target.dataset.folder;
+    if (fo) { e.preventDefault(); if (S.folders.some(f => f.path === fo)) openFolder(fo); else toast('That folder has no pictures of its own; its subfolders do.'); return; }
+    const fid = e.target.dataset.fopen;
+    if (fid) { const f = Y.folders.find(x => x.path === e.target.closest('.frow').dataset.path); return openList(f.sample, f.sample.findIndex(m => m.id === +fid)); }
     const id = e.target.dataset.open; if (!id) return;
     const list = shown.map(a => a.media);
     openList(list, list.findIndex(m => m.id === +id));
   };
+}
+async function applyFolders() {
+  const Y = T.years, paths = [...Y.fsel];
+  if (!paths.length) return;
+  const fs = Y.folders.filter(f => Y.fsel.has(f.path));
+  const nm = fs.filter(f => f.kind === 'name').length, sp = fs.filter(f => f.kind === 'split').length, mv = fs.length - nm - sp;
+  if (!confirm(`${[mv && `Move ${plural(mv, 'folder')} into year folders`, sp && `Sort the files of ${plural(sp, 'folder')} into year folders`,
+    nm && `Rename ${plural(nm, 'folder')}`].filter(Boolean).join(', ')}?\n\n` +
+    'Folders are moved or renamed on disk, with everything in them. Nothing is deleted.')) return;
+  $('#fApply').disabled = true;
+  const r = await post('/api/years/folders', { paths }).catch(fail);
+  if (!r) { renderYears(); return; }
+  const ok = r.results.filter(x => x.ok), errs = r.results.filter(x => !x.ok);
+  const done = new Set(ok.map(x => x.path));
+  const under = (p, d) => p === d || p.startsWith(d + '/');
+  Y.folders = Y.folders.filter(f => ![...done].some(d => under(f.path, d)));
+  Y.items = Y.items.filter(a => ![...done].some(d => under(a.media.folder, d)));
+  Y.fsel.clear();
+  toast(`Done: ${plural(ok.length, 'folder')}` + (errs.length ? `. ${errs.length} could not be changed: ${errs[0].error}` : ''), errs.length ? 8000 : 4000);
+  renderYears(); loadFolders();
 }
 async function moveYears() {
   const Y = T.years, ids = [...Y.sel];
@@ -1185,8 +1294,144 @@ async function emptyDupes() {
   rerenderDupes(); refreshPeopleSoon();
 }
 
+// ---- junk finder
+const ICON_JUNK = '<svg viewBox="0 0 24 24" width="40" height="40"><path d="M5 7h14l-1.2 13a2 2 0 0 1-2 1.8H8.2a2 2 0 0 1-2-1.8z" fill="#fff" stroke="#4a7fc1" stroke-width="1.6"/><path d="M3 7h18M9 7V4h6v3" fill="none" stroke="#4a7fc1" stroke-width="1.6" stroke-linecap="round"/><path d="M10 11v7M14 11v7" stroke="#4a7fc1" stroke-width="1.4" stroke-linecap="round"/></svg>';
+const JUNK_CATS = { screenshot: 'Screenshots', document: 'Documents, receipts & signs', graphic: 'Memes, logos & web graphics', book: 'Illustrations & book art' };
+function openJunk() {
+  enterTool('junk', 'Junk', ICON_JUNK, 'Looking for pictures that are not personal photos…');
+  $('#toolRerun').onclick = () => runTool('junk', '/api/junk', true, gotJunk);
+  T.limit = 120;
+  runTool('junk', '/api/junk', false, gotJunk);
+}
+function gotJunk(d) {
+  // only clear-cut screenshots and web graphics are pre-selected; paperwork and book art are for you to decide
+  const sel = new Set(d.items.filter(a => a.level === 'high' && (a.category === 'screenshot' || a.category === 'graphic') && !a.marked).map(a => a.id));
+  T.junk = { items: d.items, removed: d.removed, checked: d.checked, unanalyzed: d.unanalyzed, finished: d.finished, sel,
+    cat: store.get('junkCat', 'screenshot'), level: store.get('junkLevel', 'medium') };
+  renderJunk();
+}
+function renderJunk() {
+  const J = T.junk; if (!J || S.mode !== 'junk') return;
+  const n = c => J.items.filter(a => a.category === c && kindOk(a.media)).length;
+  const shown = J.items.filter(a => a.category === J.cat && kindOk(a.media) && LEVELS[J.level].includes(a.level));
+  const ids = new Set(J.items.map(a => a.id));
+  for (const id of J.sel) if (!ids.has(id)) J.sel.delete(id);
+  const nSel = J.sel.size, nJunk = J.items.filter(a => a.category !== 'book').length;
+  $('#toolSub').textContent = `Looked at ${plural(J.checked, 'picture')} · ${plural(nJunk, 'possible junk picture')} · ${plural(n('book'), 'illustration')}` +
+    (J.unanalyzed ? ` · ${plural(J.unanalyzed, 'picture')} not analyzed yet (check again later)` : '');
+  const rm = J.removed;
+  $('#libExtra').innerHTML = `<div class="extra-head">
+      <div class="seg jcats">${Object.entries(JUNK_CATS).map(([c, t]) => `<button data-cat="${c}" class="${J.cat === c ? 'on' : ''}">${t} (${n(c)})</button>`).join('')}</div>
+      <label>Show <select id="jLevel"><option value="high">High confidence</option><option value="medium">High and medium</option><option value="low">Everything found</option></select></label>
+    </div>
+    <div class="extra-head">
+      <button id="jSelAll">Select all shown</button><button id="jSelNone">Select none</button>
+      <span class="sep"></span>
+      <button id="jKeep" ${nSel ? '' : 'disabled'} title="Not junk: a personal photo. It will not be suggested again.">Keep (not junk)</button>
+      <button id="jBook" ${nSel ? '' : 'disabled'} title="Book art: always kept, and listed under Illustrations & book art">Mark as book art</button>
+      <button id="jRemove" class="danger-btn" ${nSel ? '' : 'disabled'}>Remove ${plural(nSel, 'selected picture')}</button>
+    </div>
+    <div class="muted">${J.cat === 'book' ? 'Drawings, paintings, book covers and other artwork: possibly illustrations for your books. They are never pre-selected. <b>Mark as book art</b> to protect them from removal for good.' :
+      'Click a picture to select it, double-click to open it. Hover for why it was picked. Only clear-cut screenshots and web graphics are pre-selected. Removed pictures go to a hidden <code>.removed-junk</code> folder, so you can put them back.'}</div>
+    ${rm.count ? `<div class="removed-bar">${plural(rm.count, 'removed picture')} (${fmtBytes(rm.bytes)}) are in the hidden <code>.removed-junk</code> folder.
+      <button id="jRestore">Put them all back</button><button id="jEmpty" class="danger-btn">Delete them permanently</button></div>` : ''}`;
+  $('#jLevel').value = J.level;
+  $('#jLevel').onchange = e => { J.level = e.target.value; store.set('junkLevel', J.level); T.limit = 120; renderJunk(); };
+  $('#libExtra .jcats').onclick = e => { const b = e.target.closest('button'); if (!b) return; J.cat = b.dataset.cat; store.set('junkCat', J.cat); T.limit = 120; renderJunk(); $('#grid').scrollTop = 0; };
+  $('#jSelAll').onclick = () => { shown.forEach(a => { if (a.marked !== 'book') J.sel.add(a.id); }); rerenderJunk(); };
+  $('#jSelNone').onclick = () => { J.sel.clear(); rerenderJunk(); };
+  $('#jKeep').onclick = () => markJunk('keep');
+  $('#jBook').onclick = () => markJunk('book');
+  $('#jRemove').onclick = removeJunk;
+  if (rm.count) { $('#jRestore').onclick = restoreJunk; $('#jEmpty').onclick = emptyJunk; }
+  const grid = $('#grid');
+  if (!shown.length) {
+    grid.innerHTML = `<div class="tool-empty">${n(J.cat) ? 'Nothing at this confidence level. Choose “Everything found” to see weaker matches.' : `No ${JUNK_CATS[J.cat].toLowerCase()} found. 🎉`}</div>`;
+    $('#libInfo').textContent = ''; return;
+  }
+  let html = '<div class="jtiles">';
+  for (const a of shown.slice(0, T.limit)) {
+    const m = a.media, on = J.sel.has(a.id), book = a.marked === 'book';
+    html += `<div class="jtile${on ? ' on' : ''}${book ? ' book' : ''}" data-id="${a.id}" title="${esc(m.name + '\n' + relPath(m.folder) + '\n\n' + a.reasons.join('\n'))}">
+      <div class="dimg"><img loading="lazy" src="${thumbUrl(m)}" alt=""><span class="jcheck">${on ? '✓' : ''}</span>${m.kind === 'video' ? '<span class="vid">▶ video</span>' : ''}${book ? '<span class="jbook">Book art</span>' : ''}</div>
+      <div class="dname">${esc(m.name)}</div>
+      <div class="dmeta">${esc(relPath(m.folder))}</div>
+      ${levelBadge(a.level, a.confidence, a.reasons.join('\n'))}
+    </div>`;
+  }
+  html += '</div>';
+  if (shown.length > T.limit) html += `<div class="tool-more"><button id="jMore">Show more (${shown.length - T.limit} left)</button></div>`;
+  grid.innerHTML = html;
+  $('#libInfo').textContent = `${plural(Math.min(shown.length, T.limit), 'picture')} shown of ${shown.length} · ${nSel} selected`;
+  const more = $('#jMore'); if (more) more.onclick = () => { T.limit += 300; rerenderJunk(); };
+  let clickTimer;
+  grid.onclick = e => {
+    const t = e.target.closest('.jtile'); if (!t) return;
+    clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => {  // wait to tell a click from a double-click
+      const id = +t.dataset.id;
+      if (t.classList.contains('book') && !J.sel.has(id)) return toast('Marked as book art, so it is kept. Select it from another list to change that.');
+      J.sel.has(id) ? J.sel.delete(id) : J.sel.add(id);
+      rerenderJunk();
+    }, 220);
+  };
+  grid.ondblclick = e => {
+    const t = e.target.closest('.jtile'); if (!t) return;
+    clearTimeout(clickTimer);
+    const list = shown.map(a => a.media);
+    openList(list, list.findIndex(m => m.id === +t.dataset.id));
+  };
+}
+function rerenderJunk() { const g = $('#grid'), st = g.scrollTop; renderJunk(); g.scrollTop = st; }
+async function markJunk(mark) {
+  const J = T.junk, ids = [...J.sel];
+  if (!ids.length) return;
+  const r = await post('/api/junk/mark', { ids, mark }).catch(fail);
+  if (!r) return;
+  const set = new Set(ids);
+  if (mark === 'keep') J.items = J.items.filter(a => !set.has(a.id));
+  else for (const a of J.items) if (set.has(a.id)) { a.marked = 'book'; a.category = 'book'; }
+  J.sel.clear();
+  toast(mark === 'keep' ? `${plural(ids.length, 'picture')} kept: they will not be suggested again` : `${plural(ids.length, 'picture')} marked as book art`);
+  rerenderJunk();
+}
+async function removeJunk() {
+  const J = T.junk, ids = [...J.sel];
+  const items = J.items.filter(a => J.sel.has(a.id));
+  const art = items.filter(a => a.category === 'book').length;
+  if (!confirm(`Remove ${plural(ids.length, 'picture')}?` + (art ? `\n\n${plural(art, 'of them looks', 'of them look')} like an illustration: check it is not for one of your books.` : '') +
+    '\n\nThey are moved to a hidden ".removed-junk" folder, so you can put them back until you delete them permanently.')) return;
+  $('#jRemove').disabled = true;
+  const r = await post('/api/junk/remove', { ids }).catch(fail);
+  if (!r) { rerenderJunk(); return; }
+  const gone = new Set(r.results.filter(x => x.ok).map(x => x.id));
+  const errs = r.results.filter(x => !x.ok);
+  J.items = J.items.filter(a => !gone.has(a.id));
+  for (const id of gone) J.sel.delete(id);
+  J.removed = r.removed;
+  toast(`Removed ${plural(gone.size, 'picture')}` + (errs.length ? `. ${errs.length} could not be removed: ${errs[0].error}` : ''), errs.length ? 8000 : 4000);
+  rerenderJunk(); loadFolders();
+}
+async function restoreJunk() {
+  const r = await post('/api/junk/restore').catch(fail);
+  if (!r) return;
+  toast(`Put back ${plural(r.restored, 'picture')}` + (r.failed.length ? `. ${r.failed.length} could not be: ${r.failed[0]}` : ''), 6000);
+  await post('/api/rescan').catch(() => {});
+  setTimeout(() => { loadFolders(); if (S.mode === 'junk') runTool('junk', '/api/junk', true, gotJunk); }, 1500);
+}
+async function emptyJunk() {
+  const rm = T.junk.removed;
+  if (!confirm(`Permanently delete ${plural(rm.count, 'removed picture')} (${fmtBytes(rm.bytes)})?\n\nThis cannot be undone.`)) return;
+  const r = await post('/api/junk/empty').catch(fail);
+  if (!r) return;
+  T.junk.removed = r.removed;
+  toast(`Deleted ${plural(r.deleted, 'picture')} permanently`);
+  rerenderJunk(); refreshPeopleSoon();
+}
+
 $('#btnYears').onclick = openYears;
 $('#btnDupes').onclick = openDupes;
+$('#btnJunk').onclick = openJunk;
 
 // ------------------------------------------------------------------ folder manager + status
 function renderRoots() {

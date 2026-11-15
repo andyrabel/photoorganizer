@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS media(
   missing INTEGER NOT NULL DEFAULT 0,
   meta_date REAL,                        -- date from EXIF / video metadata (NULL if the file has none)
   meta_read INTEGER NOT NULL DEFAULT 0,  -- 1 once meta_date has been read
+  meta_src TEXT,                         -- where meta_date came from: camera, scan, saved, video (NULL: camera)
   dhash INTEGER,                         -- 64-bit perceptual hash, for finding look-alike duplicates
   sha TEXT);                             -- content hash, computed only for files that share a size
 CREATE INDEX IF NOT EXISTS media_folder ON media(folder);
@@ -63,7 +64,12 @@ CREATE TABLE IF NOT EXISTS face_rejects(
 CREATE TABLE IF NOT EXISTS removed(
   id INTEGER PRIMARY KEY,
   media_id INTEGER, orig_path TEXT NOT NULL, trash_path TEXT NOT NULL,
-  size INTEGER, removed REAL);
+  size INTEGER, removed REAL,
+  reason TEXT NOT NULL DEFAULT 'duplicate');  -- which tool removed it: duplicate | junk
+CREATE TABLE IF NOT EXISTS junk_marks(       -- decisions from the junk finder
+  media_id INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+  mark TEXT NOT NULL,                        -- keep (a personal photo) | book (book art: always keep)
+  marked REAL);
 CREATE TABLE IF NOT EXISTS clip(
   media_id INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
   embedding BLOB);
@@ -95,9 +101,14 @@ def init():
         conn.execute("UPDATE media SET scanned=0 WHERE kind='video' AND scanned=1")
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(media)")}
     for col, decl in (("meta_date", "REAL"), ("meta_read", "INTEGER NOT NULL DEFAULT 0"),
-                      ("dhash", "INTEGER"), ("sha", "TEXT")):
+                      ("dhash", "INTEGER"), ("sha", "TEXT"), ("meta_src", "TEXT")):
         if col not in cols:
             conn.execute(f"ALTER TABLE media ADD COLUMN {col} {decl}")
+    if "meta_src" not in cols:
+        # where each date came from is new: read the headers again (only when a tool needs them)
+        conn.execute("UPDATE media SET meta_read=0 WHERE kind='image' AND meta_date IS NOT NULL")
+    if "reason" not in {r["name"] for r in conn.execute("PRAGMA table_info(removed)")}:
+        conn.execute("ALTER TABLE removed ADD COLUMN reason TEXT NOT NULL DEFAULT 'duplicate'")
     if "meta_date" not in cols:
         # a scanned file whose date differs from its modified time got that date from its metadata;
         # the rest have their metadata re-read (headers only) when the year check needs it
@@ -113,6 +124,9 @@ def default_roots():
         if user in ("public", "default", "default user", "all users") or user.startswith("defaultuser"):
             continue
         roots.append(p)
+    for p in sorted(glob.glob("/mnt/c/Users/*/OneDrive/Pictures")):  # older photos are often only in OneDrive
+        if p.split("/")[4] in {r.split("/")[4] for r in roots}:
+            roots.append(p)
     home_pics = Path.home() / "Pictures"
     if home_pics.is_dir():
         roots.append(str(home_pics))
@@ -157,6 +171,7 @@ class State:
     faces_version = 0          # bumps whenever face rows are added/removed
     assign_version = 0         # bumps whenever names change
     clip_version = 0           # bumps whenever describe-a-photo embeddings are added
+    index_again = False        # a rescan was asked for while one was running
     wake = threading.Event()
     clip_wake = threading.Event()
 
@@ -177,11 +192,16 @@ def kind_of(name):
 def index_roots():
     """Walk all roots and sync the media table (fast: stat only)."""
     if state.indexing:
+        state.index_again = True  # e.g. a folder was added mid-walk: walk once more when this one ends
         return
     state.indexing = True
     try:
-        with fs_lock:
-            _index_roots()
+        while True:
+            state.index_again = False
+            with fs_lock:
+                _index_roots()
+            if not state.index_again:
+                break
     finally:
         state.indexing = False
 
@@ -250,15 +270,34 @@ def _flush(conn, rows):
 
 # ---------------------------------------------------------------- background worker
 
+SCANNER_HINTS = ("scan", "epson", "perfection", "fastfoto", "vuescan", "visioneer", "plustek", "fujitsu fi",
+                 "officejet", "deskjet", "envy", "pixma", "mfc-", "workcentre", "flatbed")
+
+
 def parse_exif_date(exif):
+    """(timestamp, source) from EXIF, or (None, None). source:
+    camera - the time the picture was taken (DateTimeOriginal/Digitized from a camera or phone)
+    scan   - written by a scanner or scanning software: the time it was scanned, not taken
+    screen - a screenshot (iPhone marks them in the EXIF comment): the time it was captured
+    device - a date taken, but no camera recorded (saved by an app, or a camera that does not say)
+    saved  - only the file's "last saved" time (DateTime): often when it was edited or copied"""
     try:
         sub = exif.get_ifd(0x8769)
-        val = sub.get(36867) or sub.get(36868) or exif.get(306)
-        if val:
-            return datetime.strptime(str(val).strip()[:19], "%Y:%m:%d %H:%M:%S").timestamp()
+        taken = sub.get(36867) or sub.get(36868)
+        val = taken or exif.get(306)
+        if not val:
+            return None, None
+        ts = datetime.strptime(str(val).strip()[:19], "%Y:%m:%d %H:%M:%S").timestamp()
+        device = " ".join(str(exif.get(t) or "") for t in (271, 272, 305)).lower()  # Make, Model, Software
+        if any(h in device for h in SCANNER_HINTS):
+            return ts, "scan"
+        if b"screenshot" in bytes(sub.get(37510) or b"").lower():
+            return ts, "screen"
+        if not taken:
+            return ts, "saved"
+        return ts, "camera" if exif.get(271) or exif.get(272) else "device"
     except Exception:
-        pass
-    return None
+        return None, None
 
 
 def next_pending(conn, exclude=()):
@@ -295,12 +334,13 @@ def process_media(mid, engine):
     try:
         if m["kind"] == "video":
             full_w, full_h, taken = video_info(m["path"])
+            src = "video" if taken else None
             # (seconds, bgr) for a frame near the start and one near the end
             frames = [(t, np.ascontiguousarray(np.asarray(im)[:, :, ::-1]))
                       for t, im in video_face_frames(m["path"])]
         else:
             bgr, full_w, full_h, exif = load_for_detection(m["path"])
-            taken = parse_exif_date(exif) if exif is not None else None
+            taken, src = parse_exif_date(exif) if exif is not None else (None, None)
             frames = [(None, bgr)]
         found, kept = [], []
         for t, bgr in frames:
@@ -314,9 +354,9 @@ def process_media(mid, engine):
         # perceptual hash for duplicate finding; videos hash their thumbnail frame instead (see tidy.py)
         ph = None if m["kind"] == "video" else signed64(dhash_gray(cv2_gray(frames[0][1])))
         conn.execute("BEGIN")
-        conn.execute("UPDATE media SET width=?, height=?, taken=COALESCE(?, taken), meta_date=?, meta_read=1, "
+        conn.execute("UPDATE media SET width=?, height=?, taken=COALESCE(?, taken), meta_date=?, meta_src=?, meta_read=1, "
                      "dhash=COALESCE(?, dhash), scanned=1 WHERE id=?",
-                     (full_w, full_h, taken, taken, ph, mid))
+                     (full_w, full_h, taken, taken, src, ph, mid))
         new_faces = []
         for t, bgr, face, size, score, emb in found:
             cur = conn.execute(

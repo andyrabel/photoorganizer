@@ -8,6 +8,7 @@ import time
 
 from flask import Flask, abort, jsonify, request, send_file
 
+import junk
 import library as lib
 import tidy
 import video
@@ -478,6 +479,9 @@ def api_years_status():
         media = _with_media(a["id"] for a in j.result["items"])
         out["checked"] = j.result["checked"]
         out["items"] = [dict(a, media=media[a["id"]]) for a in j.result["items"] if a["id"] in media]
+        folders = j.result.get("folders", [])
+        sample = _with_media(i for f in folders for i in f["sample"])
+        out["folders"] = [dict(f, sample=[sample[i] for i in f["sample"] if i in sample]) for f in folders]
     return jsonify(out)
 
 
@@ -493,6 +497,16 @@ def api_years_move():
     try:
         results = tidy.move_to_year(ids)
     except RuntimeError as e:
+        return jsonify(error=str(e)), 409
+    return jsonify(results=results)
+
+
+@app.post("/api/years/folders")
+def api_years_folders():
+    """Move folders that are outside the year folders into one, or fix a folder name, as suggested."""
+    try:
+        results = tidy.apply_folders([str(p) for p in request.json.get("paths", [])])
+    except (ValueError, RuntimeError) as e:
         return jsonify(error=str(e)), 409
     return jsonify(results=results)
 
@@ -540,6 +554,57 @@ def api_dupes_restore():
 @app.post("/api/duplicates/empty")
 def api_dupes_empty():
     return jsonify(**tidy.empty_removed(), removed=tidy.removed_summary())
+
+
+@app.get("/api/junk")
+def api_junk_status():
+    j = junk.junk_job
+    out = j.status()
+    out["removed"] = tidy.removed_summary("junk")
+    if j.result:
+        media = _with_media(a["id"] for a in j.result["items"])
+        out.update(checked=j.result["checked"], unanalyzed=j.result["unanalyzed"],
+                   items=[dict(a, media=media[a["id"]]) for a in j.result["items"] if a["id"] in media])
+    return jsonify(out)
+
+
+@app.post("/api/junk")
+def api_junk_start():
+    junk.junk_job.start()
+    return jsonify(junk.junk_job.status())
+
+
+@app.post("/api/junk/mark")
+def api_junk_mark():
+    value = request.json.get("mark")
+    if value not in ("keep", "book", None):
+        abort(400)
+    junk.mark([int(i) for i in request.json.get("ids", [])], value)
+    return jsonify(ok=True)
+
+
+@app.post("/api/junk/remove")
+def api_junk_remove():
+    try:
+        results = junk.remove([int(i) for i in request.json.get("ids", [])])
+    except RuntimeError as e:
+        return jsonify(error=str(e)), 409
+    return jsonify(results=results, removed=tidy.removed_summary("junk"))
+
+
+@app.post("/api/junk/restore")
+def api_junk_restore():
+    try:
+        r = tidy.restore_removed("junk")
+    except RuntimeError as e:
+        return jsonify(error=str(e)), 409
+    junk.junk_job.result = None  # files came back: the list must be rebuilt
+    return jsonify(**r, removed=tidy.removed_summary("junk"))
+
+
+@app.post("/api/junk/empty")
+def api_junk_empty():
+    return jsonify(**tidy.empty_removed("junk"), removed=tidy.removed_summary("junk"))
 
 
 def main():
