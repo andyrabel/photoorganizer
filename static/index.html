@@ -18,7 +18,11 @@
     <button id="btnRescan" title="Look for new or changed files">Rescan</button>
   </div>
   <div class="tb-spacer"></div>
-  <input id="filter" type="search" placeholder="Search file and folder names…" autocomplete="off">
+  <form id="aiForm" title="Describe what is in the photo, e.g. &quot;kids opening presents&quot; or &quot;sunset at the beach&quot;. Runs on this computer.">
+    <span class="ai-ico" aria-hidden="true">✦</span>
+    <input id="aiQuery" type="search" placeholder="Describe a photo… e.g. dog on a beach" autocomplete="off">
+  </form>
+  <input id="filter" type="search" placeholder="Filter by file or folder name…" autocomplete="off">
   <div id="status" title="Background indexing and face scanning progress"></div>
 </header>
 

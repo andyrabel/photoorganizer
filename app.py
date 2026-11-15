@@ -119,6 +119,23 @@ def api_media():
     return jsonify(items=[media_json(m) for m in rows])
 
 
+@app.get("/api/search")
+def api_search():
+    """Describe-a-photo search: rank photos by how well they match a free-text description."""
+    import semantic
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        abort(400)
+    if not semantic.available():
+        return jsonify(error="Describe-a-photo search needs the CLIP model files - see README.md"), 503
+    hits = semantic.search(q)
+    if not hits:
+        return jsonify(items=[])
+    rows = {m["id"]: m for m in db().execute(
+        "SELECT * FROM media WHERE missing=0 AND id IN (%s)" % ",".join("?" * len(hits)), [h[0] for h in hits])}
+    return jsonify(items=[dict(media_json(rows[mid]), score=round(s, 3)) for mid, s in hits if mid in rows])
+
+
 @app.get("/api/media/<int:mid>")
 def api_media_detail(mid):
     m = media_row(mid)
@@ -200,6 +217,7 @@ def api_export(mid):
                  (out, os.path.dirname(out), os.path.basename(out), "image", st.st_size, st.st_mtime,
                   m["taken"] or st.st_mtime))
     state.wake.set()
+    state.clip_wake.set()
     return jsonify(ok=True, path=out)
 
 

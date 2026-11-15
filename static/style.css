@@ -43,7 +43,11 @@ code { background: #eee; padding: 0 4px; border-radius: 3px; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
 .tb-group { display: flex; gap: 6px; }
 .tb-spacer { flex: 1; }
-#filter { width: 260px; }
+#filter { width: 220px; }
+#aiForm { position: relative; display: flex; }
+#aiForm .ai-ico { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: var(--accent); pointer-events: none; }
+#aiQuery { width: 300px; padding-left: 24px; border-color: #8aa9d3; }
+.big-ico.ai { font-size: 34px; color: var(--accent); line-height: 1; width: 44px; text-align: center; }
 #status { font-size: 12px; color: var(--muted); min-width: 220px; text-align: right; }
 #status .bar { display: inline-block; width: 90px; height: 6px; background: #ddd; border-radius: 3px; vertical-align: middle; margin-left: 6px; overflow: hidden; }
 #status .bar i { display: block; height: 100%; background: var(--accent); }

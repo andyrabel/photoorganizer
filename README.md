@@ -4,6 +4,7 @@ A Picasa-style photo and video organizer that runs locally and is used in your w
 
 - **Left pane:** **People** (named people, plus `<Unknown Person>` groups of similar faces) and **Folders** (grouped by year, with counts).
 - **Right pane:** thumbnail library, and a photo/video viewer with zoom, pan, rotate and crop.
+- **Describe-a-photo search:** type what you remember ("kids opening presents", "sunset at the beach") in the ✦ box. An AI image model ranks your photos and video frames by how well they match. It runs on your computer, so nothing is uploaded.
 - **Faces:** detected automatically in the background. Name a face in the viewer, and the app suggests other photos of the same person to confirm (✓) or reject (✗).
 
 Everything stays on your machine. Edits are non-destructive: rotation and crop are stored in the
@@ -13,7 +14,7 @@ app's database, and your original files are never modified. **Save copy** writes
 ## Run
 
 ```bash
-pip install -r requirements.txt     # Flask, OpenCV, Pillow, NumPy
+pip install -r requirements.txt     # Flask, OpenCV, Pillow, NumPy, ONNX Runtime
 python3 app.py                      # then open http://localhost:8765
 ```
 
@@ -33,6 +34,19 @@ curl -L -o models/yunet.onnx https://github.com/opencv/opencv_zoo/raw/main/model
 curl -L -o models/sface.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
 ```
 
+Describe-a-photo search uses OpenAI's [CLIP ViT-B/32](https://huggingface.co/Xenova/clip-vit-base-patch32)
+model, exported to ONNX (about 600 MB). It is optional. Without these files, the rest of the app works normally:
+
+```bash
+mkdir -p models/clip
+for f in onnx/vision_model.onnx onnx/text_model.onnx tokenizer.json; do
+  curl -L -o models/clip/$(basename $f) https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main/$f
+done
+```
+
+After the models are in place, the app analyzes every photo once in the background (about 10 per second).
+Search works during that pass, but it only finds photos that have already been analyzed.
+
 ## Viewer keys
 
 | Key | Action |
@@ -51,6 +65,7 @@ curl -L -o models/sface.onnx https://github.com/opencv/opencv_zoo/raw/main/model
 |---|---|
 | `app.py` | Flask server and JSON API; serves originals with HTTP Range so videos can seek |
 | `library.py` | SQLite index (`data/library.db`), folder walker, background scan workers |
+| `semantic.py` | Describe-a-photo search: CLIP image embeddings (background worker), text query embedding, ranking |
 | `faces.py` | YuNet face detection, SFace 128-d embeddings, suggestions (cosine ≥ 0.40), `<Unknown Person>` clustering |
 | `imaging.py` | EXIF-aware decoding, thumbnails, rendering edits, export, video frames and dates |
 | `static/` | Single-page UI (vanilla JS, no build step) |
@@ -60,6 +75,8 @@ names and edits, but not your photos.
 
 ## Notes and limits
 
+- Describe-a-photo search is good at scenes, objects and activities ("birthday cake", "snowy street", "people on a boat").
+  It does not know who people are. Use People for that. It also cannot read dates or places.
 - The first face scan of a large library takes a while (about 0.3–0.5 s per photo over `/mnt/c`). The folder you have open is scanned first.
 - iPhone `.mov` files are usually HEVC. Browsers play them only with HEVC support (Edge, or the Windows "HEVC Video Extensions").
 - Video rotate, crop and zoom are applied in the viewer. Saving an edited video file is not supported yet.

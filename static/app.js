@@ -40,8 +40,9 @@ function fmtDate(ts, opts = { month: 'short', day: 'numeric', year: 'numeric' })
 
 // ------------------------------------------------------------------ state
 const S = {
-  mode: null,         // 'folder' | 'person' | 'unknown'
-  folder: null, personId: null, clusterId: null,
+  mode: null,         // 'folder' | 'person' | 'unknown' | 'search'
+  folder: null, personId: null, clusterId: null, query: '',
+  searchIndex: null,  // {enabled, done, total} for describe-a-photo search
   items: [], shown: [],
   folders: [], roots: [], people: [], clusters: [],
   lastTotal: -1,
@@ -304,6 +305,33 @@ function openCluster(cid) {
   $('#nameInput').focus();
 }
 
+// Describe-a-photo search: ranked by an on-device image/text model (CLIP)
+async function openSearch(q) {
+  S.mode = 'search'; S.query = q;
+  selectLeft(); showLibrary();
+  const head = sub => setHeader(`<div class="big-ico ai">✦</div>
+    <div><h2>“${esc(q)}”</h2><div class="sub">${sub}</div></div>`);
+  head('Searching…'); S.searchDone = false;
+  $('#libExtra').innerHTML = '';
+  setItems([]);
+  let d;
+  try { d = await api('/api/search?q=' + encodeURIComponent(q)); }
+  catch (e) { if (S.mode === 'search' && S.query === q) { head(esc(e.message)); $('#empty').textContent = ''; } return; }
+  if (S.mode !== 'search' || S.query !== q) return;
+  const n = d.items.length;
+  const si = S.searchIndex;
+  const partial = si && si.done < si.total
+    ? ` · still analyzing your library (${Math.round(100 * si.done / si.total)}% done), so more matches may appear later` : '';
+  S.searchDone = true;
+  head(n ? `${n} closest match${n === 1 ? '' : 'es'}, best first${partial}` : `No matches${partial}`);
+  setItems(d.items);
+}
+$('#aiForm').onsubmit = e => {
+  e.preventDefault();
+  const q = $('#aiQuery').value.trim();
+  if (q) openSearch(q);
+};
+
 function setHeader(html) { $('#libHeader').innerHTML = html; }
 
 function setItems(items) {
@@ -335,7 +363,8 @@ function renderGrid() {
       ${m.kind === 'video' ? '<span class="vid">▶ video</span>' : ''}${m.rotation || m.crop ? '<span class="edited">edited</span>' : ''}</div>`).join('');
   const empty = $('#empty');
   empty.hidden = !!S.shown.length || !S.mode;
-  empty.textContent = S.items.length ? 'Nothing matches the filter.' : 'Loading…';
+  empty.textContent = S.items.length ? 'Nothing matches the filter.' :
+    S.mode === 'search' && S.searchDone ? 'No photos match that description. Try different words.' : 'Loading…';
   const vids = S.shown.filter(m => m.kind === 'video').length;
   $('#libInfo').textContent = S.shown.length ? `${S.shown.length - vids} photos${vids ? `, ${vids} videos` : ''}` : '';
 }
@@ -783,7 +812,9 @@ async function pollStatus() {
     const pct = s.images ? Math.round(100 * s.scanned / s.images) : 100;
     $('#status').innerHTML = s.indexing ? 'Indexing folders…' :
       `${s.total.toLocaleString()} items · ${s.faces.toLocaleString()} faces` +
-      (s.scanned < s.images ? ` · scanning ${pct}%<span class="bar"><i style="width:${pct}%"></i></span>` : '');
+      (s.scanned < s.images ? ` · scanning ${pct}%<span class="bar"><i style="width:${pct}%"></i></span>` :
+       s.search.enabled && s.search.done < s.search.total ? ` · analyzing for search ${Math.round(100 * s.search.done / s.search.total)}%` : '');
+    S.searchIndex = s.search;
     if (s.total !== S.lastTotal && !s.indexing) { S.lastTotal = s.total; loadFolders(); }
     // refresh unnamed groups now and then while the scanner is finding faces
     if (s.scanned !== lastScanned && Date.now() - lastClusterLoad > 60000 && S.mode !== 'unknown') {

@@ -55,6 +55,9 @@ CREATE INDEX IF NOT EXISTS faces_media ON faces(media_id);
 CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);
 CREATE TABLE IF NOT EXISTS face_rejects(
   face_id INTEGER, person_id INTEGER, PRIMARY KEY(face_id, person_id));
+CREATE TABLE IF NOT EXISTS clip(
+  media_id INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+  embedding BLOB);
 """
 
 _local = threading.local()
@@ -121,7 +124,9 @@ class State:
     priority_folder = None
     faces_version = 0          # bumps whenever face rows are added/removed
     assign_version = 0         # bumps whenever names change
+    clip_version = 0           # bumps whenever describe-a-photo embeddings are added
     wake = threading.Event()
+    clip_wake = threading.Event()
 
 
 state = State()
@@ -179,7 +184,9 @@ def index_roots():
                              (size, mtime, path))
                 conn.execute("DELETE FROM faces WHERE manual=0 AND person_id IS NULL AND media_id="
                              "(SELECT id FROM media WHERE path=?)", (path,))
+                conn.execute("DELETE FROM clip WHERE media_id=(SELECT id FROM media WHERE path=?)", (path,))
             conn.execute("COMMIT")
+            state.clip_version += 1
         gone = [p for p in known if p not in seen and not known[p][2]]
         if gone:
             conn.execute("BEGIN")
@@ -187,6 +194,7 @@ def index_roots():
             conn.execute("COMMIT")
         state.indexed_at = time.time()
         state.wake.set()
+        state.clip_wake.set()
     finally:
         state.indexing = False
 
@@ -324,6 +332,8 @@ def start_background(workers=2):
     threading.Thread(target=backfill_face_thumbs, daemon=True).start()
     for _ in range(workers):
         threading.Thread(target=worker_loop, daemon=True).start()
+    import semantic
+    semantic.start_background()
 
 
 def status():
@@ -335,6 +345,7 @@ def status():
         SUM(missing=0 AND kind='video') videos
         FROM media""").fetchone()
     faces = conn.execute("SELECT COUNT(*) c FROM faces WHERE ignored=0").fetchone()["c"]
-    return {"indexing": state.indexing, "total": r["total"] or 0, "images": r["images"] or 0,
+    from semantic import progress
+    return {"search": progress(), "indexing": state.indexing, "total": r["total"] or 0, "images": r["images"] or 0,
             "scanned": r["scanned"] or 0, "videos": r["videos"] or 0, "faces": faces,
             "roots": load_config()["roots"]}

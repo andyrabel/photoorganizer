@@ -2,3 +2,4 @@ data/
 __pycache__/
 *.pyc
 models/*.onnx
+models/clip/
