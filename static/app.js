@@ -95,15 +95,27 @@ async function loadFolders() {
   renderFolders();
 }
 
+// The search box matches a folder by its display name or its path below the watched root
+const filterQuery = () => $('#filter').value.trim().toLowerCase();
+function folderMatches(f, q) {
+  return !q || folderLabel(f).toLowerCase().includes(q) || f.rel.toLowerCase().includes(q);
+}
+
 function renderFolders() {
   const el = $('#folderList');
-  $('#folderCount').textContent = `(${S.folders.length})`;
+  const q = filterQuery();
+  const folders = S.folders.filter(f => folderMatches(f, q));
+  $('#folderCount').textContent = q ? `(${folders.length} of ${S.folders.length})` : `(${S.folders.length})`;
   if (!S.folders.length) {
     el.innerHTML = `<div class="hint">No photos found yet. ${S.roots.length ? 'Indexing may still be running…' : 'Use Folder Manager to add your Pictures folder.'}</div>`;
     return;
   }
+  if (!folders.length) {
+    el.innerHTML = '<div class="hint">No folder names match the search.</div>';
+    return;
+  }
   const byYear = new Map();
-  for (const f of S.folders) {
+  for (const f of folders) {
     const y = folderYear(f);
     if (!byYear.has(y)) byYear.set(y, []);
     byYear.get(y).push(f);
@@ -299,11 +311,21 @@ function setItems(items) {
   applyFilter();
 }
 function applyFilter() {
-  const q = $('#filter').value.trim().toLowerCase();
-  S.shown = q ? S.items.filter(m => m.name.toLowerCase().includes(q)) : S.items.slice();
+  const q = filterQuery();
+  if (!q) { S.shown = S.items.slice(); renderGrid(); return; }
+  const byPath = new Map(S.folders.map(f => [f.path, f]));
+  const folderHit = new Map();  // folder path -> does its name match?
+  S.shown = S.items.filter(m => {
+    if (m.name.toLowerCase().includes(q)) return true;
+    if (!folderHit.has(m.folder)) {
+      const f = byPath.get(m.folder);
+      folderHit.set(m.folder, f ? folderMatches(f, q) : m.folder.toLowerCase().includes(q));
+    }
+    return folderHit.get(m.folder);
+  });
   renderGrid();
 }
-$('#filter').addEventListener('input', () => { if (S.mode !== 'unknown') applyFilter(); });
+$('#filter').addEventListener('input', () => { renderFolders(); if (S.mode !== 'unknown') applyFilter(); });
 
 function renderGrid() {
   const grid = $('#grid');
