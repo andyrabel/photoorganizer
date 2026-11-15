@@ -46,6 +46,7 @@ const S = {
   items: [], shown: [],
   folders: [], roots: [], people: [], clusters: [],
   lastTotal: -1,
+  ffmpeg: false,      // server can convert videos / save edited videos
 };
 
 // ------------------------------------------------------------------ left pane
@@ -412,20 +413,29 @@ function showItem(i) {
   $('#faceList').innerHTML = '';
   $('#vName').textContent = m.name;
   $('#stageMsg').hidden = true;
+  $('#vidBar').hidden = m.kind !== 'video';
   let el;
   if (m.kind === 'video') {
     el = document.createElement('video');
-    el.controls = true; el.preload = 'metadata'; el.playsInline = true;
-    el.onloadedmetadata = () => { if (token === V.token) { V.natW = el.videoWidth; V.natH = el.videoHeight; layout(); } };
-    el.onerror = () => { if (token === V.token) stageMsg('This video format cannot be played by the browser (often HEVC/H.265 .mov files from iPhones). Try Microsoft Edge, or install the HEVC Video Extensions in Windows.'); };
+    el.preload = 'metadata'; el.playsInline = true;
+    el.volume = clamp(store.get('volume', 1), 0, 1); el.muted = store.get('muted', false);
+    el.onloadedmetadata = () => {
+      if (token !== V.token) return;
+      // HEVC without a decoder often "loads" with sound but no picture
+      if (!el.videoWidth) return videoUnplayable(m, el, token);
+      V.natW = el.videoWidth; V.natH = el.videoHeight; layout(); syncVidBar();
+    };
+    el.onerror = () => { if (token === V.token) videoUnplayable(m, el, token); };
+    for (const ev of ['play', 'pause', 'timeupdate', 'durationchange', 'volumechange', 'ended']) el.addEventListener(ev, syncVidBar);
   } else {
     el = document.createElement('img');
     el.draggable = false;
     el.onload = () => { if (token === V.token) { V.natW = el.naturalWidth; V.natH = el.naturalHeight; layout(); } };
     el.onerror = () => { if (token === V.token) stageMsg('This image could not be displayed by the browser.'); };
   }
-  el.src = `/api/media/${m.id}/file`;
+  el.src = m.kind === 'video' && m.converted ? `/api/media/${m.id}/play` : `/api/media/${m.id}/file`;
   mediaBox.appendChild(el);
+  if (m.kind === 'video') syncVidBar();
   layout();
   renderFilmstrip();
   updateNavButtons();
@@ -438,12 +448,58 @@ function showItem(i) {
 
 function stageMsg(t) { const el = $('#stageMsg'); el.textContent = t; el.hidden = false; }
 
+// ---- video playback
+const curVideo = () => $('#mediaBox video');
+const fmtTime = t => { t = Math.max(0, Math.floor(t || 0)); const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = String(t % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`; };
+
+function syncVidBar() {
+  const v = curVideo(); if (!v) return;
+  const d = isFinite(v.duration) ? v.duration : 0;
+  $('#vidPlay').textContent = v.paused || v.ended ? '▶' : '❚❚';
+  $('#vidPlay').title = v.paused ? 'Play (Space)' : 'Pause (Space)';
+  $('#vidTime').textContent = `${fmtTime(v.currentTime)} / ${fmtTime(d)}`;
+  if (!vidSeeking) $('#vidSeek').value = d ? Math.round(1000 * v.currentTime / d) : 0;
+  $('#vidMute').textContent = v.muted || !v.volume ? '🔇' : '🔊';
+  $('#vidVol').value = v.muted ? 0 : v.volume;
+  $('#vidSpeed').value = String(v.playbackRate);
+}
+let vidSeeking = false;
+function togglePlay() { const v = curVideo(); if (!v || !V.natW) return; if (v.paused || v.ended) v.play().catch(() => {}); else v.pause(); }
+$('#vidPlay').onclick = togglePlay;
+$('#vidSeek').oninput = e => { const v = curVideo(); vidSeeking = true; if (v && isFinite(v.duration)) { v.currentTime = e.target.value / 1000 * v.duration; $('#vidTime').textContent = `${fmtTime(v.currentTime)} / ${fmtTime(v.duration)}`; } };
+$('#vidSeek').onchange = () => { vidSeeking = false; };
+$('#vidMute').onclick = () => { const v = curVideo(); if (v) { v.muted = !v.muted; if (!v.muted && !v.volume) v.volume = 1; store.set('muted', v.muted); } };
+$('#vidVol').oninput = e => { const v = curVideo(); if (v) { v.volume = +e.target.value; v.muted = !v.volume; store.set('volume', v.volume); store.set('muted', v.muted); } };
+$('#vidSpeed').onchange = e => { const v = curVideo(); if (v) v.playbackRate = +e.target.value; };
+$('#vidBar').addEventListener('pointerdown', e => e.stopPropagation());
+$('#vidBar').addEventListener('dblclick', e => e.stopPropagation());
+$('#vidBar').addEventListener('wheel', e => e.stopPropagation());
+
+async function videoUnplayable(m, el, token) {
+  el.removeAttribute('src'); el.load();
+  if (m.converted) return stageMsg('This video could not be played, even after converting it.');
+  if (!S.ffmpeg) return stageMsg('The browser cannot play this video format (often HEVC/H.265 .mov files from iPhones). ' +
+    'Install ffmpeg support (pip install imageio-ffmpeg, then restart the app) to convert it automatically, or use Microsoft Edge with the HEVC Video Extensions.');
+  stageMsg('Converting this video so the browser can play it…');
+  let j = await post(`/api/media/${m.id}/convert`).catch(e => ({ state: 'error', error: e.message }));
+  while (j.state === 'running' && token === V.token) {
+    stageMsg(`Converting this video so the browser can play it… ${Math.round(100 * j.progress)}%`);
+    await new Promise(r => setTimeout(r, 700));
+    j = await api(`/api/media/${m.id}/convert`).catch(e => ({ state: 'error', error: e.message }));
+  }
+  if (token !== V.token) return;
+  if (j.state !== 'done') return stageMsg('Could not convert this video: ' + (j.error || 'unknown error'));
+  m.converted = true;
+  $('#stageMsg').hidden = true;
+  el.src = `/api/media/${m.id}/play`;
+}
+
 function updateNavButtons() {
   const n = viewerList().length;
   $('#vPrev').disabled = V.idx <= 0; $('#vNext').disabled = V.idx >= n - 1;
   const vid = V.item && V.item.kind === 'video';
-  $('#vExport').disabled = vid; $('#vAddFace').disabled = vid;
-  $('#vExport').title = vid ? 'Saving edited videos is not supported yet (edits are still shown here)' : 'Save an edited copy next to the original';
+  $('#vExport').disabled = vid && !S.ffmpeg; $('#vAddFace').disabled = vid;
+  $('#vExport').title = vid && !S.ffmpeg ? 'Saving edited videos needs ffmpeg (pip install imageio-ffmpeg, then restart the app)' : 'Save an edited copy next to the original';
 }
 
 function layout() {
@@ -495,12 +551,15 @@ stage.addEventListener('pointerdown', e => {
   if (V.cropMode) return cropPointerDown(e);
   if (V.drawMode) return drawPointerDown(e);
   if (e.target.closest('.fbox')) return;
-  if (e.target.tagName === 'VIDEO' && V.zoom <= 1.01) return; // let the video controls work
   e.preventDefault();
-  const sx = e.clientX, sy = e.clientY, px = V.panX, py = V.panY;
+  const sx = e.clientX, sy = e.clientY, px = V.panX, py = V.panY, onVideo = e.target.tagName === 'VIDEO';
+  let moved = false;
   stage.setPointerCapture(e.pointerId); stage.classList.add('panning');
-  const move = ev => { V.panX = px + ev.clientX - sx; V.panY = py + ev.clientY - sy; layout(); };
-  const up = () => { stage.classList.remove('panning'); stage.removeEventListener('pointermove', move); stage.removeEventListener('pointerup', up); };
+  const move = ev => { if (Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) > 4) moved = true; V.panX = px + ev.clientX - sx; V.panY = py + ev.clientY - sy; layout(); };
+  const up = () => {
+    stage.classList.remove('panning'); stage.removeEventListener('pointermove', move); stage.removeEventListener('pointerup', up);
+    if (onVideo && !moved) togglePlay(); // a click (not a drag) on a video plays/pauses it
+  };
   stage.addEventListener('pointermove', move); stage.addEventListener('pointerup', up);
 });
 
@@ -759,9 +818,20 @@ $('#vReset').onclick = () => { exitCrop(); saveEdit({ rotation: 0, crop: null })
 $('#vAddFace').onclick = () => (V.drawMode ? exitDraw() : enterDraw());
 $('#vShowFaces').onchange = e => { $('#viewer').classList.toggle('hide-faces', !e.target.checked); store.set('showFaces', e.target.checked); };
 $('#vExport').onclick = async () => {
-  if (!V.item.rotation && !V.item.crop && !confirm('This photo has no edits. Save an identical copy anyway?')) return;
-  const r = await post(`/api/media/${V.item.id}/export`).catch(fail);
-  if (r) { toast('Saved copy: ' + r.path.split('/').pop(), 5000); if (S.mode === 'folder') api('/api/media?folder=' + encodeURIComponent(S.folder)).then(d => { S.items = d.items; gridDirty = true; }); }
+  const m = V.item, what = m.kind === 'video' ? 'video' : 'photo';
+  if (!m.rotation && !m.crop && !confirm(`This ${what} has no edits. Save an identical copy anyway?`)) return;
+  const btn = $('#vExport'); btn.disabled = true;
+  let r = await post(`/api/media/${m.id}/export`).catch(fail);
+  while (r && r.state === 'running') {
+    toast(`Saving edited video… ${Math.round(100 * r.progress)}%`, 2000);
+    await new Promise(res => setTimeout(res, 1000));
+    r = await api(`/api/media/${m.id}/export`).catch(fail);
+  }
+  if (V.item === m) updateNavButtons();
+  if (!r) return;
+  if (r.state !== 'done') return toast('Could not save the copy: ' + (r.error || 'unknown error'), 6000);
+  toast('Saved copy: ' + r.path.split('/').pop(), 5000);
+  if (S.mode === 'folder') api('/api/media?folder=' + encodeURIComponent(S.folder)).then(d => { S.items = d.items; gridDirty = true; });
 };
 
 document.addEventListener('keydown', e => {
@@ -775,6 +845,7 @@ document.addEventListener('keydown', e => {
   else if (k === '-') zoomCenter(0.8);
   else if (k === '0') zoomFit();
   else if (k === '1') zoomActual();
+  else if (k === ' ' && V.item && V.item.kind === 'video') { if (e.target.tagName === 'BUTTON') e.target.blur(); togglePlay(); }
   else if (k === '[') rotate(-1);
   else if (k === ']') rotate(1);
   else if (k === 'c' || k === 'C') V.cropMode ? exitCrop() : enterCrop();
@@ -814,7 +885,7 @@ async function pollStatus() {
       `${s.total.toLocaleString()} items · ${s.faces.toLocaleString()} faces` +
       (s.scanned < s.images ? ` · scanning ${pct}%<span class="bar"><i style="width:${pct}%"></i></span>` :
        s.search.enabled && s.search.done < s.search.total ? ` · analyzing for search ${Math.round(100 * s.search.done / s.search.total)}%` : '');
-    S.searchIndex = s.search;
+    S.searchIndex = s.search; S.ffmpeg = s.ffmpeg;
     if (s.total !== S.lastTotal && !s.indexing) { S.lastTotal = s.total; loadFolders(); }
     // refresh unnamed groups now and then while the scanner is finding faces
     if (s.scanned !== lastScanned && Date.now() - lastClusterLoad > 60000 && S.mode !== 'unknown') {

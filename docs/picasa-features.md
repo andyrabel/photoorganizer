@@ -50,7 +50,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 |---|---|---|
 | Full-screen viewer with filmstrip | Arrow-key navigation, filmstrip at bottom | ✅ (in the right pane; ⬜ true full-screen with F11-style toggle) |
 | Zoom / pan | Mouse wheel, zoom slider, 1:1 | ✅ |
-| Video playback | Plays MOV/MP4/AVI and others | ✅ via the browser (HEVC needs Edge or the Windows HEVC extension) |
+| Video playback | Plays MOV/MP4/AVI and others | ✅ in the viewer, with a control bar that stays upright when rotated. Formats the browser can't play are converted with ffmpeg and cached |
 | Slideshow | Timed slideshow with transitions and music | ⬜ — **cheap, high value** |
 | Side-by-side compare | Original next to edited, or two photos | ⬜ |
 | EXIF / properties panel | Camera, lens, exposure, histogram | 🟡 date, size and path only |
@@ -74,7 +74,7 @@ On Save it kept the original in a hidden `.picasaoriginals` folder, so **Undo Sa
 | Text overlay | Add captions on top of an image | ⬜ |
 | Effects (~24) | Sharpen, sepia, B&W, warmify, film grain, tint, saturation, soft focus, glow, filtered B&W, focal B&W, graduated tint, vignette, duo-tone, borders, cross-process, Lomo-ish, HDR-ish, … | ⬜ |
 | Undo / redo of edit stack | Per-photo edit history | 🟡 "Reset edits" only |
-| Save / Save As / Export | Write edited JPEG; keep the original | 🟡 "Save copy" writes `name_edited.jpg` next to the original |
+| Save / Save As / Export | Write edited JPEG; keep the original | 🟡 "Save copy" writes `name_edited.jpg` (or `name_edited.mp4` for videos) next to the original |
 | Batch edit | Apply rotate, auto-fix or effects to a selection | ⬜ |
 | Video trim | Trim the start and end of clips (Picasa 3.x) | ⬜ (needs ffmpeg) |
 

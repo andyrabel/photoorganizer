@@ -68,6 +68,7 @@ Search works during that pass, but it only finds photos that have already been a
 | `semantic.py` | Describe-a-photo search: CLIP image embeddings (background worker), text query embedding, ranking |
 | `faces.py` | YuNet face detection, SFace 128-d embeddings, suggestions (cosine ≥ 0.40), `<Unknown Person>` clustering |
 | `imaging.py` | EXIF-aware decoding, thumbnails, rendering edits, export, video frames and dates |
+| `video.py` | Optional ffmpeg jobs: convert videos for playback, save rotated/cropped video copies |
 | `static/` | Single-page UI (vanilla JS, no build step) |
 
 `data/` holds the database plus thumbnail and face-crop caches. Deleting it resets the app. You will lose
@@ -78,7 +79,9 @@ names and edits, but not your photos.
 - Describe-a-photo search is good at scenes, objects and activities ("birthday cake", "snowy street", "people on a boat").
   It does not know who people are. Use People for that. It also cannot read dates or places.
 - The first face scan of a large library takes a while (about 0.3–0.5 s per photo over `/mnt/c`). The folder you have open is scanned first.
-- iPhone `.mov` files are usually HEVC. Browsers play them only with HEVC support (Edge, or the Windows "HEVC Video Extensions").
-- Video rotate, crop and zoom are applied in the viewer. Saving an edited video file is not supported yet.
+- Videos play in the viewer with their own control bar (Space plays and pauses, and a click on the picture does the same). The bar stays upright when you rotate a video.
+- Formats the browser can't play (iPhone HEVC `.mov`, AVI, WMV and others) are converted to H.264 MP4 the first time you open them.
+  The converted copy is cached in `data/video/`, and the original is not touched. This needs ffmpeg, either on `PATH` or from `pip install imageio-ffmpeg`.
+- Rotating or cropping a video is saved like a photo edit. **Save copy** writes `name_edited.mp4` next to the original, and this also needs ffmpeg.
 
 See [docs/picasa-features.md](docs/picasa-features.md) for the Picasa feature inventory and roadmap.

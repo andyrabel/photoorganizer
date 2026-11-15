@@ -101,6 +101,16 @@
         <div id="stage">
           <div id="viewport"><div id="plane"><div id="mediaBox"></div></div></div>
           <div id="stageMsg" hidden></div>
+          <div id="vidBar" hidden>
+            <button id="vidPlay" title="Play (Space)">▶</button>
+            <span id="vidTime">0:00 / 0:00</span>
+            <input id="vidSeek" type="range" min="0" max="1000" value="0" aria-label="Seek">
+            <button id="vidMute" title="Mute">🔊</button>
+            <input id="vidVol" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+            <select id="vidSpeed" title="Playback speed">
+              <option value="0.5">0.5×</option><option value="1">1×</option><option value="1.5">1.5×</option><option value="2">2×</option>
+            </select>
+          </div>
         </div>
         <aside id="facePanel">
           <h4>People in this photo</h4>

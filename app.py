@@ -9,6 +9,7 @@ import time
 from flask import Flask, abort, jsonify, request, send_file
 
 import library as lib
+import video
 from library import FACE_THUMBS, THUMBS, db, state
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -31,7 +32,8 @@ def media_json(m):
     return {"id": m["id"], "name": m["name"], "folder": m["folder"], "kind": m["kind"],
             "taken": m["taken"], "width": m["width"], "height": m["height"],
             "rotation": m["rotation"], "crop": json.loads(m["crop"]) if m["crop"] else None,
-            "ver": m["edit_ver"]}
+            "ver": m["edit_ver"],
+            **({"converted": video.playable_path(m["id"]).exists()} if m["kind"] == "video" else {})}
 
 
 def root_of(path, roots):
@@ -53,7 +55,7 @@ def index():
 
 @app.get("/api/status")
 def api_status():
-    return jsonify(lib.status())
+    return jsonify({**lib.status(), "ffmpeg": bool(video.ffmpeg_exe())})
 
 
 @app.post("/api/rescan")
@@ -174,6 +176,33 @@ def api_media_file(mid):
     return send_file(m["path"], mimetype=mime, conditional=True, max_age=3600)
 
 
+@app.get("/api/media/<int:mid>/play")
+def api_play(mid):
+    """The browser-friendly converted copy of a video (see /convert)."""
+    media_row(mid)
+    out = video.playable_path(mid)
+    if not out.exists():
+        abort(404)
+    return send_file(out, mimetype="video/mp4", conditional=True, max_age=3600)
+
+
+@app.post("/api/media/<int:mid>/convert")
+def api_convert(mid):
+    m = media_row(mid)
+    if m["kind"] != "video":
+        return jsonify(error="Not a video"), 400
+    try:
+        key = video.start_playable(m)
+    except RuntimeError as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(video.job(key))
+
+
+@app.get("/api/media/<int:mid>/convert")
+def api_convert_status(mid):
+    return jsonify(video.job(f"play:{mid}") or {"state": "none"})
+
+
 @app.get("/api/media/<int:mid>/thumb")
 def api_thumb(mid):
     from imaging import make_thumb
@@ -209,16 +238,35 @@ def api_edit(mid):
 def api_export(mid):
     from imaging import export_edited
     m = media_row(mid)
-    if m["kind"] != "image":
-        return jsonify(error="Exporting edited videos is not supported yet"), 400
-    out = export_edited(m, json.loads(m["crop"]) if m["crop"] else None)
+    crop = json.loads(m["crop"]) if m["crop"] else None
+    if m["kind"] == "video":
+        try:
+            key = video.start_export(m, crop)
+        except RuntimeError as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(video.job(key))
+    out = export_edited(m, crop)
+    register_copy(m, out, "image")
+    return jsonify(state="done", path=out)
+
+
+@app.get("/api/media/<int:mid>/export")
+def api_export_status(mid):
+    """Progress of a video export; the finished file is added to the library once."""
+    m = media_row(mid)
+    j = video.job(f"export:{mid}") or {"state": "none"}
+    if j["state"] == "done":
+        register_copy(m, j["path"], "video")
+    return jsonify(j)
+
+
+def register_copy(m, out, kind):
     st = os.stat(out)
     db().execute("INSERT OR IGNORE INTO media(path,folder,name,kind,size,mtime,taken) VALUES(?,?,?,?,?,?,?)",
-                 (out, os.path.dirname(out), os.path.basename(out), "image", st.st_size, st.st_mtime,
+                 (out, os.path.dirname(out), os.path.basename(out), kind, st.st_size, st.st_mtime,
                   m["taken"] or st.st_mtime))
     state.wake.set()
     state.clip_wake.set()
-    return jsonify(ok=True, path=out)
 
 
 @app.post("/api/media/<int:mid>/faces")
