@@ -34,7 +34,11 @@ CREATE TABLE IF NOT EXISTS media(
   crop TEXT,
   edit_ver INTEGER NOT NULL DEFAULT 0,
   scanned INTEGER NOT NULL DEFAULT 0,
-  missing INTEGER NOT NULL DEFAULT 0);
+  missing INTEGER NOT NULL DEFAULT 0,
+  meta_date REAL,                        -- date from EXIF / video metadata (NULL if the file has none)
+  meta_read INTEGER NOT NULL DEFAULT 0,  -- 1 once meta_date has been read
+  dhash INTEGER,                         -- 64-bit perceptual hash, for finding look-alike duplicates
+  sha TEXT);                             -- content hash, computed only for files that share a size
 CREATE INDEX IF NOT EXISTS media_folder ON media(folder);
 CREATE INDEX IF NOT EXISTS media_scanned ON media(scanned);
 CREATE TABLE IF NOT EXISTS people(
@@ -56,6 +60,10 @@ CREATE INDEX IF NOT EXISTS faces_media ON faces(media_id);
 CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);
 CREATE TABLE IF NOT EXISTS face_rejects(
   face_id INTEGER, person_id INTEGER, PRIMARY KEY(face_id, person_id));
+CREATE TABLE IF NOT EXISTS removed(
+  id INTEGER PRIMARY KEY,
+  media_id INTEGER, orig_path TEXT NOT NULL, trash_path TEXT NOT NULL,
+  size INTEGER, removed REAL);
 CREATE TABLE IF NOT EXISTS clip(
   media_id INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
   embedding BLOB);
@@ -85,6 +93,15 @@ def init():
         # videos used to be scanned for metadata only; scan them again for faces
         conn.execute("ALTER TABLE faces ADD COLUMN frame REAL")
         conn.execute("UPDATE media SET scanned=0 WHERE kind='video' AND scanned=1")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(media)")}
+    for col, decl in (("meta_date", "REAL"), ("meta_read", "INTEGER NOT NULL DEFAULT 0"),
+                      ("dhash", "INTEGER"), ("sha", "TEXT")):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE media ADD COLUMN {col} {decl}")
+    if "meta_date" not in cols:
+        # a scanned file whose date differs from its modified time got that date from its metadata;
+        # the rest have their metadata re-read (headers only) when the year check needs it
+        conn.execute("UPDATE media SET meta_date=taken, meta_read=1 WHERE scanned=1 AND ABS(taken - mtime) > 1")
 
 
 # ---------------------------------------------------------------- config / roots
@@ -124,6 +141,15 @@ def normalize_path(p):
 
 # ---------------------------------------------------------------- indexing
 
+def root_of(path, roots):
+    """The watched root folder that contains `path` (the longest match), or ''."""
+    best = ""
+    for r in roots:
+        if (path == r or path.startswith(r.rstrip("/") + "/")) and len(r) > len(best):
+            best = r
+    return best
+
+
 class State:
     indexing = False
     indexed_at = 0.0
@@ -136,6 +162,7 @@ class State:
 
 
 state = State()
+fs_lock = threading.Lock()  # held while indexing and while files are moved, so the two never interleave
 
 
 def kind_of(name):
@@ -153,56 +180,62 @@ def index_roots():
         return
     state.indexing = True
     try:
-        roots = load_config()["roots"]
-        conn = db()
-        known = {r["path"]: (r["size"], r["mtime"], r["missing"])
-                 for r in conn.execute("SELECT path,size,mtime,missing FROM media")}
-        seen = set()
-        new_rows, changed = [], []
-        for root in roots:
-            if not os.path.isdir(root):
-                continue
-            for dirpath, dirnames, filenames in os.walk(root):
-                dirnames[:] = [d for d in dirnames
-                               if not d.startswith(".") and d.lower() not in SKIP_DIRS]
-                for fn in filenames:
-                    k = kind_of(fn)
-                    if not k or fn.startswith("._"):
-                        continue
-                    full = os.path.join(dirpath, fn)
-                    try:
-                        st = os.stat(full)
-                    except OSError:
-                        continue
-                    seen.add(full)
-                    old = known.get(full)
-                    if old is None:
-                        new_rows.append((full, dirpath, fn, k, st.st_size, st.st_mtime, st.st_mtime))
-                    elif old[0] != st.st_size or abs((old[1] or 0) - st.st_mtime) > 1 or old[2]:
-                        changed.append((st.st_size, st.st_mtime, full))
-                if len(new_rows) >= 500:
-                    _flush(conn, new_rows)
-        _flush(conn, new_rows)
-        if changed:
-            conn.execute("BEGIN")
-            for size, mtime, path in changed:
-                conn.execute("UPDATE media SET size=?, mtime=?, missing=0, scanned=0 WHERE path=?",
-                             (size, mtime, path))
-                conn.execute("DELETE FROM faces WHERE manual=0 AND person_id IS NULL AND media_id="
-                             "(SELECT id FROM media WHERE path=?)", (path,))
-                conn.execute("DELETE FROM clip WHERE media_id=(SELECT id FROM media WHERE path=?)", (path,))
-            conn.execute("COMMIT")
-            state.clip_version += 1
-        gone = [p for p in known if p not in seen and not known[p][2]]
-        if gone:
-            conn.execute("BEGIN")
-            conn.executemany("UPDATE media SET missing=1 WHERE path=?", [(p,) for p in gone])
-            conn.execute("COMMIT")
-        state.indexed_at = time.time()
-        state.wake.set()
-        state.clip_wake.set()
+        with fs_lock:
+            _index_roots()
     finally:
         state.indexing = False
+
+
+def _index_roots():
+    roots = load_config()["roots"]
+    conn = db()
+    known = {r["path"]: (r["size"], r["mtime"], r["missing"])
+             for r in conn.execute("SELECT path,size,mtime,missing FROM media")}
+    seen = set()
+    new_rows, changed = [], []
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith(".") and d.lower() not in SKIP_DIRS]
+            for fn in filenames:
+                k = kind_of(fn)
+                if not k or fn.startswith("._"):
+                    continue
+                full = os.path.join(dirpath, fn)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                seen.add(full)
+                old = known.get(full)
+                if old is None:
+                    new_rows.append((full, dirpath, fn, k, st.st_size, st.st_mtime, st.st_mtime))
+                elif old[0] != st.st_size or abs((old[1] or 0) - st.st_mtime) > 1 or old[2]:
+                    changed.append((st.st_size, st.st_mtime, full))
+            if len(new_rows) >= 500:
+                _flush(conn, new_rows)
+    _flush(conn, new_rows)
+    if changed:
+        conn.execute("BEGIN")
+        for size, mtime, path in changed:
+            conn.execute("UPDATE media SET size=?, mtime=?, missing=0, scanned=0, meta_read=0, "
+                         "dhash=NULL, sha=NULL WHERE path=?",
+                         (size, mtime, path))
+            conn.execute("DELETE FROM faces WHERE manual=0 AND person_id IS NULL AND media_id="
+                         "(SELECT id FROM media WHERE path=?)", (path,))
+            conn.execute("DELETE FROM clip WHERE media_id=(SELECT id FROM media WHERE path=?)", (path,))
+        conn.execute("COMMIT")
+        state.clip_version += 1
+    gone = [p for p in known if p not in seen and not known[p][2]]
+    if gone:
+        conn.execute("BEGIN")
+        conn.executemany("UPDATE media SET missing=1 WHERE path=?", [(p,) for p in gone])
+        conn.execute("COMMIT")
+    state.indexed_at = time.time()
+    state.wake.set()
+    state.clip_wake.set()
 
 
 def _flush(conn, rows):
@@ -241,6 +274,11 @@ def next_pending(conn, exclude=()):
     return row["id"] if row else None
 
 
+def signed64(v):
+    """SQLite integers are signed 64-bit; store an unsigned 64-bit hash in that range."""
+    return None if v is None else (v - (1 << 64) if v >= 1 << 63 else v)
+
+
 VIDEO_SAME_FACE = 0.5  # SFace cosine above which two faces in one video are the same person
 _claim_lock = threading.Lock()
 _claimed = set()
@@ -249,7 +287,7 @@ _claimed = set()
 def process_media(mid, engine):
     """Read metadata + detect faces for one media row."""
     from PIL import Image
-    from imaging import load_for_detection, video_face_frames, video_info
+    from imaging import cv2_gray, dhash_gray, load_for_detection, video_face_frames, video_info
     conn = db()
     m = conn.execute("SELECT * FROM media WHERE id=?", (mid,)).fetchone()
     if m is None:
@@ -273,9 +311,12 @@ def process_media(mid, engine):
                     continue
                 kept.append(emb)
                 found.append((t, bgr, {"x": x / dw, "y": y / dh, "w": w / dw, "h": h / dh}, min(w, h), score, emb))
+        # perceptual hash for duplicate finding; videos hash their thumbnail frame instead (see tidy.py)
+        ph = None if m["kind"] == "video" else signed64(dhash_gray(cv2_gray(frames[0][1])))
         conn.execute("BEGIN")
-        conn.execute("UPDATE media SET width=?, height=?, taken=COALESCE(?, taken), scanned=1 WHERE id=?",
-                     (full_w, full_h, taken, mid))
+        conn.execute("UPDATE media SET width=?, height=?, taken=COALESCE(?, taken), meta_date=?, meta_read=1, "
+                     "dhash=COALESCE(?, dhash), scanned=1 WHERE id=?",
+                     (full_w, full_h, taken, taken, ph, mid))
         new_faces = []
         for t, bgr, face, size, score, emb in found:
             cur = conn.execute(

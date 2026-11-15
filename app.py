@@ -9,8 +9,9 @@ import time
 from flask import Flask, abort, jsonify, request, send_file
 
 import library as lib
+import tidy
 import video
-from library import FACE_THUMBS, THUMBS, db, state
+from library import FACE_THUMBS, THUMBS, db, root_of, state
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 
@@ -34,14 +35,6 @@ def media_json(m):
             "rotation": m["rotation"], "crop": json.loads(m["crop"]) if m["crop"] else None,
             "ver": m["edit_ver"],
             **({"converted": video.playable_path(m["id"]).exists()} if m["kind"] == "video" else {})}
-
-
-def root_of(path, roots):
-    best = ""
-    for r in roots:
-        if (path == r or path.startswith(r.rstrip("/") + "/")) and len(r) > len(best):
-            best = r
-    return best
 
 
 # ---------------------------------------------------------------- pages
@@ -461,6 +454,92 @@ def api_unknown():
             d["suggest"] = dict(d["suggest"], name=names.get(d["suggest"]["person_id"]))
         out.append(d)
     return jsonify(clusters=out)
+
+
+# ---------------------------------------------------------------- tidy-up tools
+
+def _with_media(ids):
+    """{id: media_json} for the given ids that are still in the library."""
+    ids = list(ids)
+    rows = {}
+    for i in range(0, len(ids), 900):  # SQLite variable limit
+        chunk = ids[i:i + 900]
+        rows.update({m["id"]: media_json(m) for m in db().execute(
+            "SELECT * FROM media WHERE missing=0 AND id IN (%s)" % ",".join("?" * len(chunk)), chunk)})
+    return rows
+
+
+@app.get("/api/years")
+def api_years_status():
+    """Year check: progress, and the files that look like they are in the wrong year folder."""
+    j = tidy.year_job
+    out = j.status()
+    if j.result:
+        media = _with_media(a["id"] for a in j.result["items"])
+        out["checked"] = j.result["checked"]
+        out["items"] = [dict(a, media=media[a["id"]]) for a in j.result["items"] if a["id"] in media]
+    return jsonify(out)
+
+
+@app.post("/api/years")
+def api_years_start():
+    tidy.year_job.start()
+    return jsonify(tidy.year_job.status())
+
+
+@app.post("/api/years/move")
+def api_years_move():
+    ids = [int(i) for i in request.json.get("ids", [])]
+    try:
+        results = tidy.move_to_year(ids)
+    except RuntimeError as e:
+        return jsonify(error=str(e)), 409
+    return jsonify(results=results)
+
+
+@app.get("/api/duplicates")
+def api_dupes_status():
+    j = tidy.dup_job
+    out = j.status()
+    out["removed"] = tidy.removed_summary()
+    if j.result:
+        media = _with_media(it["id"] for g in j.result["groups"] for it in g["items"])
+        groups = []
+        for g in j.result["groups"]:
+            items = [dict(it, media=media[it["id"]]) for it in g["items"] if it["id"] in media]
+            if len(items) >= 2:
+                groups.append(dict(g, items=items))
+        out["groups"] = groups
+    return jsonify(out)
+
+
+@app.post("/api/duplicates")
+def api_dupes_start():
+    tidy.dup_job.start()
+    return jsonify(tidy.dup_job.status())
+
+
+@app.post("/api/duplicates/remove")
+def api_dupes_remove():
+    try:
+        results = tidy.remove_duplicates([int(i) for i in request.json.get("ids", [])])
+    except (ValueError, RuntimeError) as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(results=results, removed=tidy.removed_summary())
+
+
+@app.post("/api/duplicates/restore")
+def api_dupes_restore():
+    try:
+        r = tidy.restore_removed()
+    except RuntimeError as e:
+        return jsonify(error=str(e)), 409
+    return jsonify(**r, removed=tidy.removed_summary())
+
+
+@app.post("/api/duplicates/empty")
+def api_dupes_empty():
+    return jsonify(**tidy.empty_removed(), removed=tidy.removed_summary())
 
 
 def main():

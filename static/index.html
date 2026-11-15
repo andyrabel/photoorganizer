@@ -17,6 +17,10 @@
     <button id="btnFolders" title="Choose which folders on disk are watched">Folder Manager…</button>
     <button id="btnRescan" title="Look for new or changed files">Rescan</button>
   </div>
+  <div class="tb-group">
+    <button id="btnYears" title="Find photos and videos that seem to be in the wrong year folder">Year check</button>
+    <button id="btnDupes" title="Find duplicate photos and videos">Duplicates</button>
+  </div>
   <div class="tb-spacer"></div>
   <form id="aiForm" title="Describe what is in the photo, e.g. &quot;kids opening presents&quot; or &quot;sunset at the beach&quot;. Runs on this computer.">
     <span class="ai-ico" aria-hidden="true">✦</span>
@@ -47,6 +51,9 @@
       <div id="grid"></div>
       <div id="empty" hidden></div>
       <footer id="libFooter">
+        <div class="seg" id="kindSeg" role="group" aria-label="Show">
+          <button data-k="all" title="Show photos and videos">All</button><button data-k="image" title="Show only photos">Photos</button><button data-k="video" title="Show only videos">Videos</button>
+        </div>
         <span id="libInfo"></span>
         <label class="sizer">Thumbnail size <input id="thumbSize" type="range" min="90" max="320" value="170"></label>
       </footer>

@@ -40,7 +40,8 @@ function fmtDate(ts, opts = { month: 'short', day: 'numeric', year: 'numeric' })
 
 // ------------------------------------------------------------------ state
 const S = {
-  mode: null,         // 'folder' | 'person' | 'unknown' | 'search'
+  mode: null,         // 'folder' | 'person' | 'unknown' | 'search' | 'years' | 'dupes'
+  kind: 'all',        // show 'all', only 'image' (photos) or only 'video'
   folder: null, personId: null, clusterId: null, query: '',
   searchIndex: null,  // {enabled, done, total} for describe-a-photo search
   items: [], shown: [],
@@ -103,17 +104,21 @@ function folderMatches(f, q) {
   return !q || folderLabel(f).toLowerCase().includes(q) || f.rel.toLowerCase().includes(q);
 }
 
+// number of items in a folder that the Photos / Videos switch lets through
+const kindCount = f => S.kind === 'video' ? f.videos : S.kind === 'image' ? f.count - f.videos : f.count;
+const KIND_WORD = { image: 'photos', video: 'videos' };
+
 function renderFolders() {
   const el = $('#folderList');
   const q = filterQuery();
-  const folders = S.folders.filter(f => folderMatches(f, q));
-  $('#folderCount').textContent = q ? `(${folders.length} of ${S.folders.length})` : `(${S.folders.length})`;
+  const folders = S.folders.filter(f => folderMatches(f, q) && kindCount(f) > 0);
+  $('#folderCount').textContent = q || S.kind !== 'all' ? `(${folders.length} of ${S.folders.length})` : `(${S.folders.length})`;
   if (!S.folders.length) {
     el.innerHTML = `<div class="hint">No photos found yet. ${S.roots.length ? 'Indexing may still be running…' : 'Use Folder Manager to add your Pictures folder.'}</div>`;
     return;
   }
   if (!folders.length) {
-    el.innerHTML = '<div class="hint">No folder names match the search.</div>';
+    el.innerHTML = `<div class="hint">${q ? 'No folder names match the search' : 'No folders'}${S.kind !== 'all' ? ` with ${KIND_WORD[S.kind]}` : ''}.</div>`;
     return;
   }
   const byYear = new Map();
@@ -127,7 +132,7 @@ function renderFolders() {
   for (const y of years) {
     html += `<div class="year">${y}</div>`;
     for (const f of byYear.get(y).sort((a, b) => folderSortKey(b).localeCompare(folderSortKey(a))))
-      html += `<div class="item folder${S.mode === 'folder' && S.folder === f.path ? ' sel' : ''}" data-path="${esc(f.path)}" title="${esc(f.path)}">${FOLDER_SVG}<span class="label">${esc(folderLabel(f))}</span><span class="n">(${f.count})</span></div>`;
+      html += `<div class="item folder${S.mode === 'folder' && S.folder === f.path ? ' sel' : ''}" data-path="${esc(f.path)}" title="${esc(f.path)}">${FOLDER_SVG}<span class="label">${esc(folderLabel(f))}</span><span class="n">(${kindCount(f)})</span></div>`;
   }
   el.innerHTML = html;
 }
@@ -192,7 +197,7 @@ function showLibrary() {
 function selectLeft() { renderFolders(); renderPeople(); }
 
 async function openFolder(path) {
-  S.mode = 'folder'; S.folder = path; store.set('last', { folder: path });
+  leaveTool(); S.mode = 'folder'; S.folder = path; store.set('last', { folder: path });
   selectLeft(); showLibrary();
   const f = S.folders.find(x => x.path === path);
   setHeader(`${FOLDER_SVG.replace('folder-ico', 'big-ico')}
@@ -208,7 +213,7 @@ async function openFolder(path) {
 }
 
 async function openPerson(pid, keepScroll = false) {
-  S.mode = 'person'; S.personId = pid; store.set('last', { person: pid });
+  leaveTool(); S.mode = 'person'; S.personId = pid; store.set('last', { person: pid });
   selectLeft(); showLibrary();
   const p = personById(pid);
   if (!p) return;
@@ -263,7 +268,7 @@ async function loadSuggestions(pid) {
 
 function openCluster(cid) {
   const c = S.clusters.find(x => x.id === cid); if (!c) return;
-  S.mode = 'unknown'; S.clusterId = cid;
+  leaveTool(); S.mode = 'unknown'; S.clusterId = cid;
   selectLeft(); showLibrary();
   setHeader(`<img class="avatar" src="${faceUrl(c.faces[0])}"><div><h2>&lt;Unknown Person&gt;</h2>
     <div class="sub">${c.count} similar faces</div></div>`);
@@ -272,16 +277,24 @@ function openCluster(cid) {
       <form id="nameForm" style="display:flex;gap:6px"><input id="nameInput" list="peopleNames" placeholder="Who is this?" autocomplete="off" required><button class="primary">Add name</button></form>
       ${sg ? `<span class="pill">Looks like <b>${esc(sg)}</b> <button id="sgYes" class="yes">✓ Yes</button></span>` : ''}
       <button id="ignoreSel" title="Hide the selected faces (not real faces, or people you don't want to name)">Ignore selected</button>
+      <button id="toggleAll" title="Unselect every face, then click just the ones that are this person">Unselect all</button>
     </div><div class="muted">Click faces that are <b>not</b> this person to leave them out. Double-click a face to open its photo.</div>`;
   const grid = $('#grid');
   grid.className = 'faces';
   $('#empty').hidden = true;
   grid.innerHTML = c.faces.map(f => `<div class="ftile" data-face="${f}"><img loading="lazy" src="${faceUrl(f)}"></div>`).join('');
   $('#libInfo').textContent = `${c.count} faces`;
-  grid.querySelectorAll('.ftile').forEach(t => {
-    t.onclick = () => t.classList.toggle('off');
+  const tiles = [...grid.querySelectorAll('.ftile')];
+  const syncToggle = () => { $('#toggleAll').textContent = tiles.some(t => !t.classList.contains('off')) ? 'Unselect all' : 'Select all'; };
+  $('#toggleAll').onclick = () => {
+    const off = tiles.some(t => !t.classList.contains('off'));
+    tiles.forEach(t => t.classList.toggle('off', off));
+    syncToggle();
+  };
+  tiles.forEach(t => {
+    t.onclick = () => { t.classList.toggle('off'); syncToggle(); };
     t.ondblclick = async () => {
-      t.classList.remove('off');
+      t.classList.remove('off'); syncToggle();
       const d = await api(`/api/faces/${t.dataset.face}`).catch(fail);
       if (d) openStandalone(d.media_id, d.id);
     };
@@ -308,7 +321,7 @@ function openCluster(cid) {
 
 // Describe-a-photo search: ranked by an on-device image/text model (CLIP)
 async function openSearch(q) {
-  S.mode = 'search'; S.query = q;
+  leaveTool(); S.mode = 'search'; S.query = q;
   selectLeft(); showLibrary();
   const head = sub => setHeader(`<div class="big-ico ai">✦</div>
     <div><h2>“${esc(q)}”</h2><div class="sub">${sub}</div></div>`);
@@ -341,10 +354,11 @@ function setItems(items) {
 }
 function applyFilter() {
   const q = filterQuery();
-  if (!q) { S.shown = S.items.slice(); renderGrid(); return; }
+  const items = S.kind === 'all' ? S.items : S.items.filter(m => m.kind === S.kind);
+  if (!q) { S.shown = items; renderGrid(); return; }
   const byPath = new Map(S.folders.map(f => [f.path, f]));
   const folderHit = new Map();  // folder path -> does its name match?
-  S.shown = S.items.filter(m => {
+  S.shown = items.filter(m => {
     if (m.name.toLowerCase().includes(q)) return true;
     if (!folderHit.has(m.folder)) {
       const f = byPath.get(m.folder);
@@ -354,7 +368,19 @@ function applyFilter() {
   });
   renderGrid();
 }
-$('#filter').addEventListener('input', () => { renderFolders(); if (S.mode !== 'unknown') applyFilter(); });
+const GRID_MODES = ['folder', 'person', 'search'];
+$('#filter').addEventListener('input', () => { renderFolders(); if (GRID_MODES.includes(S.mode)) applyFilter(); });
+
+// Photos / Videos switch: applies to every view and to the folder list
+function setKind(k) {
+  S.kind = k; store.set('kind', k);
+  document.querySelectorAll('#kindSeg button').forEach(b => b.classList.toggle('on', b.dataset.k === k));
+  renderFolders();
+  if (GRID_MODES.includes(S.mode)) applyFilter();
+  else if (S.mode === 'years') renderYears();
+  else if (S.mode === 'dupes') renderDupes();
+}
+$('#kindSeg').addEventListener('click', e => { const b = e.target.closest('button'); if (b) setKind(b.dataset.k); });
 
 function renderGrid() {
   const grid = $('#grid');
@@ -364,10 +390,14 @@ function renderGrid() {
       ${m.kind === 'video' ? '<span class="vid">▶ video</span>' : ''}${m.rotation || m.crop ? '<span class="edited">edited</span>' : ''}</div>`).join('');
   const empty = $('#empty');
   empty.hidden = !!S.shown.length || !S.mode;
-  empty.textContent = S.items.length ? 'Nothing matches the filter.' :
+  empty.textContent = S.items.length ? (S.kind !== 'all' && !S.items.some(m => m.kind === S.kind)
+      ? `No ${KIND_WORD[S.kind]} here. Showing ${KIND_WORD[S.kind]} only: choose All at the bottom to see everything.` : 'Nothing matches the filter.') :
     S.mode === 'search' && S.searchDone ? 'No photos match that description. Try different words.' : 'Loading…';
   const vids = S.shown.filter(m => m.kind === 'video').length;
-  $('#libInfo').textContent = S.shown.length ? `${S.shown.length - vids} photos${vids ? `, ${vids} videos` : ''}` : '';
+  const hidden = S.items.length - S.shown.length;
+  const photos = S.shown.length - vids;
+  $('#libInfo').textContent = S.shown.length ? [photos && plural(photos, 'photo'), vids && plural(vids, 'video')].filter(Boolean).join(', ') +
+    (hidden ? ` (${hidden} hidden)` : '') : '';
 }
 
 $('#grid').addEventListener('click', e => {
@@ -392,6 +422,13 @@ function openViewer(i) {
   V.standalone = null;
   $('#library').hidden = true; $('#viewer').hidden = false;
   showItem(i);
+}
+
+// open the viewer on a list that is not the library grid (year check / duplicates)
+function openList(items, i) {
+  V.standalone = { items };
+  $('#library').hidden = true; $('#viewer').hidden = false;
+  showItem(Math.max(0, i));
 }
 
 async function openStandalone(mediaId, faceId = null) {
@@ -879,6 +916,278 @@ document.addEventListener('keydown', e => {
   e.preventDefault();
 });
 
+// ------------------------------------------------------------------ tidy-up tools (year check, duplicates)
+const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB';
+const plural = (n, w, ws = w + 's') => `${n.toLocaleString()} ${n === 1 ? w : ws}`;
+const relPath = p => { const r = S.roots.find(x => p === x || p.startsWith(x.replace(/\/$/, '') + '/')); return r ? (p.slice(r.length).replace(/^\//, '') || r.split('/').pop()) : p; };
+const kindOk = m => S.kind === 'all' || m.kind === S.kind;
+const T = { years: null, dupes: null, pollTimer: null, limit: 0 };
+const ICON_CAL = '<svg viewBox="0 0 24 24" width="40" height="40"><rect x="3" y="5" width="18" height="16" rx="2" fill="#fff" stroke="#4a7fc1" stroke-width="1.6"/><path d="M3 9h18" stroke="#4a7fc1" stroke-width="1.6"/><path d="M8 3v4M16 3v4" stroke="#4a7fc1" stroke-width="1.6" stroke-linecap="round"/><path d="M8 15.5l2.5 2.5 5-5" fill="none" stroke="#2e8b3e" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const ICON_DUP = '<svg viewBox="0 0 24 24" width="40" height="40"><rect x="7.5" y="7.5" width="13" height="13" rx="1.5" fill="#cfe0f4" stroke="#4a7fc1" stroke-width="1.6"/><rect x="3.5" y="3.5" width="13" height="13" rx="1.5" fill="#fff" stroke="#4a7fc1" stroke-width="1.6"/><circle cx="10" cy="10" r="2.6" fill="#4a7fc1"/></svg>';
+
+function enterTool(mode, title, icon, sub) {
+  S.mode = mode; S.items = []; S.shown = [];
+  selectLeft(); showLibrary();
+  document.querySelectorAll('#btnYears, #btnDupes').forEach(b => b.classList.remove('on'));
+  $(mode === 'years' ? '#btnYears' : '#btnDupes').classList.add('on');
+  setHeader(`<div class="big-ico tool">${icon}</div><div><h2>${title}</h2><div class="sub" id="toolSub">${sub}</div></div>
+    <div class="actions"><button id="toolRerun">Check again</button></div>`);
+  $('#libExtra').innerHTML = '';
+  const grid = $('#grid'); grid.className = 'tool'; grid.innerHTML = ''; grid.scrollTop = 0;
+  $('#empty').hidden = true; $('#libInfo').textContent = '';
+}
+function leaveTool() {
+  document.querySelectorAll('#btnYears, #btnDupes').forEach(b => b.classList.remove('on'));
+  clearTimeout(T.pollTimer);
+  const g = $('#grid'); g.onclick = g.ondblclick = g.onchange = null;
+}
+
+// Poll a background job until it finishes, showing progress in the header
+async function runTool(mode, url, start, render) {
+  clearTimeout(T.pollTimer);
+  let d = start ? await post(url).catch(fail) : null;
+  for (;;) {
+    if (S.mode !== mode) return;
+    d = await api(url).catch(e => ({ state: 'error', error: e.message }));
+    if (S.mode !== mode) return;
+    if (d.state === 'running') {
+      const pct = d.total ? Math.round(100 * d.done / d.total) : null;
+      $('#toolSub').innerHTML = `${esc(d.phase)}…${pct != null ? ` ${d.done.toLocaleString()} of ${d.total.toLocaleString()} <span class="bar"><i style="width:${pct}%"></i></span>` : ''}`;
+      $('#toolRerun').disabled = true;
+      await new Promise(r => (T.pollTimer = setTimeout(r, 800)));
+      continue;
+    }
+    $('#toolRerun').disabled = false;
+    if (d.state === 'idle' && !start) { start = true; await post(url).catch(fail); continue; }
+    if (d.state === 'error') { $('#toolSub').textContent = 'Could not finish: ' + d.error; return; }
+    render(d);
+    return;
+  }
+}
+
+// ---- year check
+function openYears() {
+  enterTool('years', 'Year check', ICON_CAL, 'Looking for photos and videos in the wrong year folder…');
+  $('#toolRerun').onclick = () => runTool('years', '/api/years', true, gotYears);
+  T.limit = 60;
+  runTool('years', '/api/years', false, gotYears);
+}
+function gotYears(d) {
+  T.years = { items: d.items, checked: d.checked, finished: d.finished, level: store.get('yearsLevel', 'medium') };
+  // pre-select the high-confidence suggestions
+  T.years.sel = new Set(d.items.filter(a => a.level === 'high').map(a => a.id));
+  renderYears();
+}
+const LEVELS = { high: ['high'], medium: ['high', 'medium'], low: ['high', 'medium', 'low'] };
+function renderYears() {
+  const Y = T.years; if (!Y || S.mode !== 'years') return;
+  const counts = { high: 0, medium: 0, low: 0 };
+  for (const a of Y.items) if (kindOk(a.media)) counts[a.level]++;
+  const shown = Y.items.filter(a => kindOk(a.media) && LEVELS[Y.level].includes(a.level));
+  for (const id of Y.sel) if (!shown.some(a => a.id === id)) Y.sel.delete(id);
+  $('#toolSub').textContent = `Checked ${plural(Y.checked, 'file')} in year folders · ` +
+    (Y.items.length ? `${plural(Y.items.length, 'file')} may be in the wrong year` : 'everything looks right') +
+    (Y.finished ? ` · ${new Date(Y.finished * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '');
+  $('#libExtra').innerHTML = !Y.items.length ? '' : `<div class="extra-head">
+      <label>Show <select id="yLevel">
+        <option value="high">High confidence (${counts.high})</option>
+        <option value="medium">High and medium (${counts.high + counts.medium})</option>
+        <option value="low">All suggestions (${counts.high + counts.medium + counts.low})</option></select></label>
+      <button id="ySelAll">Select all shown</button><button id="ySelNone">Select none</button>
+      <button id="yMove" class="primary" ${Y.sel.size ? '' : 'disabled'}>Move ${plural(Y.sel.size, 'selected file')}</button>
+    </div><div class="muted">The suggestion comes from the date the camera recorded, any date in the file or folder name, and (weakly) when the file was last changed.
+      Files move to the suggested year folder, keeping any month and event folder below it. People, edits and search results move with them.</div>`;
+  if (Y.items.length) {
+    $('#yLevel').value = Y.level;
+    $('#yLevel').onchange = e => { Y.level = e.target.value; store.set('yearsLevel', Y.level); T.limit = 60; renderYears(); };
+    $('#ySelAll').onclick = () => { shown.forEach(a => Y.sel.add(a.id)); renderYears(); };
+    $('#ySelNone').onclick = () => { Y.sel.clear(); renderYears(); };
+    $('#yMove').onclick = moveYears;
+  }
+  // group by current folder: misfiled photos usually come in batches (a whole event)
+  const groups = new Map();
+  for (const a of shown) {
+    const k = a.media.folder + '\n' + a.target;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(a);
+  }
+  const grid = $('#grid');
+  if (!shown.length) {
+    grid.innerHTML = `<div class="tool-empty">${Y.items.length ? 'No suggestions at this confidence level. Choose “All suggestions” to see weaker ones.' : 'Every photo and video in a year folder (such as …/2021/…) matches its year. 🎉'}</div>`;
+    $('#libInfo').textContent = ''; return;
+  }
+  let html = '', n = 0;
+  for (const [, list] of groups) {
+    if (n >= T.limit) break;
+    const a0 = list[0], allSel = list.every(a => Y.sel.has(a.id));
+    html += `<section class="ygroup"><div class="yghead"><label><input type="checkbox" data-group="${esc(a0.media.folder + '\n' + a0.target)}" ${allSel ? 'checked' : ''}>
+      <span class="yfrom">${esc(relPath(a0.media.folder))}</span></label> <span class="arrow">→</span> <span class="yto">${esc(relPath(a0.target))}</span>
+      <span class="muted">${plural(list.length, 'file')}</span></div>
+      ${a0.note ? `<div class="ynote">${esc(a0.note)}</div>` : ''}`;
+    for (const a of list) {
+      n++;
+      html += `<div class="yrow" data-id="${a.id}">
+        <input type="checkbox" ${Y.sel.has(a.id) ? 'checked' : ''} aria-label="Move ${esc(a.media.name)}">
+        <img loading="lazy" src="${thumbUrl(a.media)}" data-open="${a.id}" title="Open">
+        <div class="yinfo"><div class="yname">${esc(a.media.name)}${a.media.kind === 'video' ? ' <span class="tag">video</span>' : ''}</div>
+          <ul class="ev">${a.evidence.map(e => `<li class="${e.agrees ? 'for' : e.year === a.folder_year ? 'against' : 'other'}">${esc(e.label)}</li>`).join('')}</ul></div>
+        <div class="yverdict"><div><span class="yr old">${a.folder_year}</span> → <span class="yr new">${a.year}</span></div>
+          <div class="conf ${a.level}" title="How sure the suggestion is, from how strong and consistent the evidence is">${a.level[0].toUpperCase() + a.level.slice(1)} · ${Math.round(a.confidence * 100)}%</div></div>
+      </div>`;
+    }
+    html += '</section>';
+  }
+  if (n < shown.length) html += `<div class="tool-more"><button id="yMore">Show more (${shown.length - n} left)</button></div>`;
+  grid.innerHTML = html;
+  $('#libInfo').textContent = `${plural(shown.length, 'suggestion')} shown · ${Y.sel.size} selected`;
+  const more = $('#yMore'); if (more) more.onclick = () => { T.limit += 200; const st = grid.scrollTop; renderYears(); grid.scrollTop = st; };
+  grid.onchange = e => {
+    const cb = e.target; if (cb.type !== 'checkbox') return;
+    if (cb.dataset.group != null) { for (const a of shown) if (a.media.folder + '\n' + a.target === cb.dataset.group) cb.checked ? Y.sel.add(a.id) : Y.sel.delete(a.id); }
+    else { const id = +cb.closest('.yrow').dataset.id; cb.checked ? Y.sel.add(id) : Y.sel.delete(id); }
+    const st = grid.scrollTop; renderYears(); grid.scrollTop = st;
+  };
+  grid.onclick = e => {
+    const id = e.target.dataset.open; if (!id) return;
+    const list = shown.map(a => a.media);
+    openList(list, list.findIndex(m => m.id === +id));
+  };
+}
+async function moveYears() {
+  const Y = T.years, ids = [...Y.sel];
+  if (!ids.length) return;
+  if (!confirm(`Move ${plural(ids.length, 'file')} to the suggested year folders?\n\nFiles are moved on disk (not copied). Nothing is deleted.`)) return;
+  $('#yMove').disabled = true;
+  const r = await post('/api/years/move', { ids }).catch(fail);
+  if (!r) { $('#yMove').disabled = false; return; }
+  const moved = new Set(r.results.filter(x => x.ok).map(x => x.id));
+  const errs = r.results.filter(x => !x.ok);
+  Y.items = Y.items.filter(a => !moved.has(a.id)); Y.sel.clear();
+  toast(`Moved ${plural(moved.size, 'file')}` + (errs.length ? `. ${errs.length} could not be moved: ${errs[0].error}` : ''), errs.length ? 8000 : 4000);
+  const st = $('#grid').scrollTop; renderYears(); $('#grid').scrollTop = st;
+  loadFolders();
+}
+
+// ---- duplicates
+function openDupes() {
+  enterTool('dupes', 'Duplicates', ICON_DUP, 'Looking for duplicate photos and videos…');
+  $('#toolRerun').onclick = () => runTool('dupes', '/api/duplicates', true, gotDupes);
+  T.limit = 40;
+  runTool('dupes', '/api/duplicates', false, gotDupes);
+}
+function gotDupes(d) {
+  // byte-for-byte copies of the file to keep are pre-marked for removal; look-alikes are left for you to decide
+  const remove = new Set();
+  for (const g of d.groups) for (const it of g.items) if (it.id !== g.keep && it.same_as_keep) remove.add(it.id);
+  T.dupes = { groups: d.groups, removed: d.removed, finished: d.finished, remove, show: store.get('dupesShow', 'both') };
+  renderDupes();
+}
+function renderDupes() {
+  const D = T.dupes; if (!D || S.mode !== 'dupes') return;
+  const groups = D.groups.filter(g => (D.show === 'both' || D.show === g.kind) && g.items.some(it => kindOk(it.media)));
+  const nExact = D.groups.filter(g => g.kind === 'exact').length, nSim = D.groups.length - nExact;
+  const marked = D.groups.flatMap(g => g.items).filter(it => D.remove.has(it.id));
+  const freed = marked.reduce((t, it) => t + (it.size || 0), 0);
+  $('#toolSub').textContent = D.groups.length ? `${plural(nExact, 'set')} of exact copies · ${plural(nSim, 'set')} of look-alikes` : 'No duplicates found';
+  const rm = D.removed;
+  $('#libExtra').innerHTML = `${D.groups.length ? `<div class="extra-head">
+      <label>Show <select id="dShow"><option value="both">Everything (${D.groups.length})</option>
+        <option value="exact">Exact copies (${nExact})</option><option value="similar">Look-alikes (${nSim})</option></select></label>
+      <button id="dMarkExact" title="In every set, mark the byte-for-byte copies of the file being kept">Mark all extra exact copies</button>
+      <button id="dUnmark">Unmark all</button>
+      <button id="dRemove" class="danger-btn" ${marked.length ? '' : 'disabled'}>Remove ${plural(marked.length, 'marked file')}${marked.length ? ` (${fmtBytes(freed)})` : ''}</button>
+    </div><div class="muted"><b>Exact copies</b> are byte-for-byte identical. <b>Look-alikes</b> are the same picture saved differently (resized, re-saved or converted). They can also be burst shots, so check them before removing.
+      Click a picture to mark it <span class="keep-word">keep</span> or <span class="rm-word">remove</span>. Double-click to open it.</div>` : ''}
+    ${rm.count ? `<div class="removed-bar">${plural(rm.count, 'removed file')} (${fmtBytes(rm.bytes)}) are in the hidden <code>.removed-duplicates</code> folder inside your Pictures folder.
+      <button id="dRestore">Put them all back</button><button id="dEmpty" class="danger-btn">Delete them permanently</button></div>` : ''}`;
+  if (D.groups.length) {
+    $('#dShow').value = D.show;
+    $('#dShow').onchange = e => { D.show = e.target.value; store.set('dupesShow', D.show); T.limit = 40; renderDupes(); };
+    $('#dMarkExact').onclick = () => { for (const g of D.groups) for (const it of g.items) if (it.id !== g.keep && it.same_as_keep) D.remove.add(it.id); rerenderDupes(); };
+    $('#dUnmark').onclick = () => { D.remove.clear(); rerenderDupes(); };
+    $('#dRemove').onclick = removeDupes;
+  }
+  if (rm.count) { $('#dRestore').onclick = restoreDupes; $('#dEmpty').onclick = emptyDupes; }
+  const grid = $('#grid');
+  if (!groups.length) {
+    grid.innerHTML = `<div class="tool-empty">${D.groups.length ? `No duplicate ${S.kind === 'all' ? 'files' : KIND_WORD[S.kind]} of this type.` : 'No duplicate photos or videos found. 🎉'}</div>`;
+    $('#libInfo').textContent = ''; return;
+  }
+  let html = '';
+  for (const g of groups.slice(0, T.limit)) {
+    const gi = D.groups.indexOf(g);
+    html += `<section class="dgroup" data-g="${gi}"><div class="dghead"><span class="dkind ${g.kind}">${g.kind === 'exact' ? 'Exact copies' : 'Look-alikes'}</span>
+      <span class="muted">${plural(g.items.length, 'file')} · ${fmtBytes(g.extra_bytes)} in extra copies</span></div><div class="dtiles">`;
+    for (const it of g.items) {
+      const m = it.media, rmv = D.remove.has(it.id);
+      html += `<div class="dtile ${rmv ? 'rm' : 'keep'}" data-id="${it.id}" title="${esc(it.path)}">
+        <div class="dimg"><img loading="lazy" src="${thumbUrl(m)}" alt=""><span class="dbadge">${rmv ? 'Remove' : 'Keep'}</span>${m.kind === 'video' ? '<span class="vid">▶ video</span>' : ''}</div>
+        <div class="dname">${esc(m.name)}</div>
+        <div class="dmeta">${esc(relPath(m.folder))}</div>
+        <div class="dmeta">${m.width && m.height ? `${m.width}×${m.height} · ` : ''}${fmtBytes(it.size || 0)}${m.taken ? ' · ' + fmtDate(m.taken) : ''}</div>
+        ${g.kind === 'similar' && it.id !== g.keep && it.same_as_keep ? '<div class="dmeta">identical to the first</div>' : ''}
+      </div>`;
+    }
+    html += '</div></section>';
+  }
+  if (groups.length > T.limit) html += `<div class="tool-more"><button id="dMore">Show more (${groups.length - T.limit} sets left)</button></div>`;
+  grid.innerHTML = html;
+  $('#libInfo').textContent = `${plural(Math.min(groups.length, T.limit), 'set')} shown of ${groups.length} · ${marked.length} marked to remove`;
+  const more = $('#dMore'); if (more) more.onclick = () => { T.limit += 100; rerenderDupes(); };
+  let clickTimer;
+  grid.onclick = e => {
+    const t = e.target.closest('.dtile'); if (!t) return;
+    clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => {  // wait to tell a click from a double-click
+      const id = +t.dataset.id, g = D.groups[+t.closest('.dgroup').dataset.g];
+      if (!D.remove.has(id) && g.items.filter(it => !D.remove.has(it.id)).length <= 1) return toast('Keep at least one file from each set');
+      D.remove.has(id) ? D.remove.delete(id) : D.remove.add(id);
+      rerenderDupes();
+    }, 220);
+  };
+  grid.ondblclick = e => {
+    const t = e.target.closest('.dtile'); if (!t) return;
+    clearTimeout(clickTimer);
+    const g = D.groups[+t.closest('.dgroup').dataset.g], list = g.items.map(it => it.media);
+    openList(list, list.findIndex(m => m.id === +t.dataset.id));
+  };
+}
+function rerenderDupes() { const g = $('#grid'), st = g.scrollTop; renderDupes(); g.scrollTop = st; }
+async function removeDupes() {
+  const D = T.dupes, ids = [...D.remove];
+  const bytes = D.groups.flatMap(g => g.items).filter(it => D.remove.has(it.id)).reduce((t, it) => t + (it.size || 0), 0);
+  if (!confirm(`Remove ${plural(ids.length, 'file')} (${fmtBytes(bytes)})?\n\nThey are moved to a hidden ".removed-duplicates" folder, so you can put them back until you delete them permanently.`)) return;
+  $('#dRemove').disabled = true;
+  const r = await post('/api/duplicates/remove', { ids }).catch(fail);
+  if (!r) { rerenderDupes(); return; }
+  const gone = new Set(r.results.filter(x => x.ok).map(x => x.id));
+  const errs = r.results.filter(x => !x.ok);
+  D.groups = D.groups.map(g => ({ ...g, items: g.items.filter(it => !gone.has(it.id)) })).filter(g => g.items.length >= 2);
+  for (const id of gone) D.remove.delete(id);
+  D.removed = r.removed;
+  toast(`Removed ${plural(gone.size, 'file')}` + (errs.length ? `. ${errs.length} could not be removed: ${errs[0].error}` : ''), errs.length ? 8000 : 4000);
+  rerenderDupes(); loadFolders();
+}
+async function restoreDupes() {
+  const r = await post('/api/duplicates/restore').catch(fail);
+  if (!r) return;
+  toast(`Put back ${plural(r.restored, 'file')}` + (r.failed.length ? `. ${r.failed.length} could not be: ${r.failed[0]}` : ''), 6000);
+  await post('/api/rescan').catch(() => {});
+  setTimeout(() => { loadFolders(); if (S.mode === 'dupes') runTool('dupes', '/api/duplicates', true, gotDupes); }, 1500);
+}
+async function emptyDupes() {
+  const rm = T.dupes.removed;
+  if (!confirm(`Permanently delete ${plural(rm.count, 'removed file')} (${fmtBytes(rm.bytes)})?\n\nThis cannot be undone.`)) return;
+  const r = await post('/api/duplicates/empty').catch(fail);
+  if (!r) return;
+  T.dupes.removed = r.removed;
+  toast(`Deleted ${plural(r.deleted, 'file')} permanently`);
+  rerenderDupes(); refreshPeopleSoon();
+}
+
+$('#btnYears').onclick = openYears;
+$('#btnDupes').onclick = openDupes;
+
 // ------------------------------------------------------------------ folder manager + status
 function renderRoots() {
   $('#rootList').innerHTML = S.roots.map(r => `<li><span>${esc(r)}</span><button data-root="${esc(r)}">Remove</button></li>`).join('') || '<li class="muted">No folders yet.</li>';
@@ -922,6 +1231,7 @@ async function pollStatus() {
 // ------------------------------------------------------------------ boot
 (async function boot() {
   setupSections();
+  setKind(store.get('kind', 'all'));
   const ts = store.get('thumb', 170); $('#thumbSize').value = ts; document.documentElement.style.setProperty('--thumb', ts + 'px');
   if (!store.get('showFaces', true)) { $('#vShowFaces').checked = false; $('#viewer').classList.add('hide-faces'); }
   await Promise.all([loadFolders(), loadPeople()]).catch(fail);

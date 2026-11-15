@@ -6,6 +6,9 @@ A Picasa-style photo and video organizer that runs locally and is used in your w
 - **Right pane:** thumbnail library, and a photo/video viewer with zoom, pan, rotate and crop.
 - **Describe-a-photo search:** type what you remember ("kids opening presents", "sunset at the beach") in the ✦ box. An AI image model ranks your photos and video frames by how well they match. It runs on your computer, so nothing is uploaded.
 - **Faces:** detected automatically in the background, in photos and in videos (a frame near the start and one near the end). Name a face in the viewer, and the app suggests other photos of the same person to confirm (✓) or reject (✗).
+- **Photos / Videos switch** (bottom of the library): show everything, only photos, or only videos. It applies to folders, people, search results and the tools below.
+- **Year check:** finds photos and videos that seem to be in the wrong year folder (any folder path with a year in it, such as `PhotoSync/2019/11`). Each one gets a suggested year and a confidence rating, with the evidence listed. Selected files can then be moved to the right year folder.
+- **Duplicates:** finds exact copies (byte-for-byte identical) and look-alikes (the same picture resized, re-saved or converted). You choose which copies to remove.
 
 Everything stays on your machine. Edits are non-destructive: rotation and crop are stored in the
 app's database, and your original files are never modified. **Save copy** writes a new
@@ -47,6 +50,37 @@ done
 After the models are in place, the app analyzes every photo once in the background (about 10 per second).
 Search works during that pass, but it only finds photos that have already been analyzed.
 
+## Year check
+
+The year check looks only at folders whose path below a watched folder has a year segment, such as `2019` in
+`PhotoSync/2019/11`. For each file it weighs this evidence:
+
+| Evidence | Weight |
+|---|---|
+| Camera date (EXIF) | strong |
+| Video recording date (MP4/QuickTime header) | strong |
+| Date in the file name (`IMG_20180812_…`, `2018-08-12 …`) | good |
+| Year in an event folder's name (`…/2019/11/Birthday Nov 2011`) | fair |
+| Most other files in the same folder (used only for files without their own date) | good |
+| File modified date | weak; often just the date the file was copied, so it never suggests a year on its own |
+
+Confidence is **High** (75% or more), **Medium** (50% or more) or **Low**. It is lower when some evidence agrees with the
+folder, and when the date is within a day of New Year (video dates are stored in UTC). High-confidence suggestions
+are selected for you. **Move** swaps the year folder (and a month folder right below it) for the suggested one,
+keeps any event folder below that, and never overwrites a file. People, edits and search data move with the file.
+Folders left empty are removed, but the year folder itself is kept.
+
+## Duplicates
+
+- **Exact copies** have identical contents. Only files that share a size are read in full, so this is quick.
+- **Look-alikes** have nearly the same 64-bit picture fingerprint (difference hash) and the same shape.
+  They are usually resized or re-saved copies, but can also be burst shots, so check before removing. Double-click to open one.
+
+The copy to keep is chosen in this order: highest resolution, a name that doesn't look like a copy (`copy`, `(2)`, `_edited`),
+already in the right year folder, then the largest file. Byte-for-byte copies of the kept file are marked for removal; you can change any choice.
+**Remove** moves files to a hidden `.removed-duplicates` folder inside the watched folder (on the same drive, so it's instant).
+**Put them all back** restores them. **Delete them permanently** empties the folder. The app never deletes a file any other way.
+
 ## Viewer keys
 
 | Key | Action |
@@ -69,6 +103,7 @@ Search works during that pass, but it only finds photos that have already been a
 | `faces.py` | YuNet face detection, SFace 128-d embeddings, suggestions (cosine ≥ 0.40), `<Unknown Person>` clustering |
 | `imaging.py` | EXIF-aware decoding, thumbnails, rendering edits, export, video frames and dates |
 | `video.py` | Optional ffmpeg jobs: convert videos for playback, save rotated/cropped video copies |
+| `tidy.py` | Year check (date evidence, confidence, moving files) and duplicate finding (content hash, difference hash, holding folder) |
 | `static/` | Single-page UI (vanilla JS, no build step) |
 
 `data/` holds the database plus thumbnail and face-crop caches. Deleting it resets the app. You will lose

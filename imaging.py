@@ -156,6 +156,30 @@ def mp4_creation_time(path):
     return None
 
 
+def cv2_gray(bgr):
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+
+def dhash_gray(gray):
+    """64-bit difference hash of a grayscale array: robust to resizing and re-compression."""
+    small = cv2.resize(gray, (9, 8), interpolation=cv2.INTER_AREA).astype(np.int16)
+    bits = (small[:, 1:] > small[:, :-1]).flatten()
+    return int(np.packbits(bits).view(">u8")[0])
+
+
+def dhash_pil(im):
+    return dhash_gray(np.asarray(im.convert("L")))
+
+
+def read_meta_date(path, kind):
+    """The capture date stored in the file (EXIF or QuickTime/MP4 header), or None. Reads headers only."""
+    if kind == "video":
+        return mp4_creation_time(path)
+    from library import parse_exif_date
+    with Image.open(path) as im:
+        return parse_exif_date(im.getexif())
+
+
 def apply_edits(im, rotation=0, crop=None):
     rotation = (rotation or 0) % 4
     if rotation:
