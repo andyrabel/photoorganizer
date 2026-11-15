@@ -254,7 +254,7 @@ async function loadSuggestions(pid) {
     const fid = +t.dataset.face;
     $('.yes', t).onclick = async () => { t.remove(); await post('/api/faces/assign', { face_ids: [fid], person_id: pid }).catch(fail); done(); };
     $('.no', t).onclick = async () => { t.remove(); await post('/api/faces/reject', { face_ids: [fid], person_id: pid }).catch(fail); done(); };
-    $('img', t).onclick = () => openStandalone(+t.dataset.media);
+    $('img', t).onclick = () => openStandalone(+t.dataset.media, +t.dataset.face);
   });
   const ids = () => [...box.querySelectorAll('.ftile')].map(t => +t.dataset.face);
   $('#sgAll').onclick = async () => { const f = ids(); await post('/api/faces/assign', { face_ids: f, person_id: pid }).catch(fail); toast(`Added ${f.length} faces to ${p.name}`); refreshPeopleSoon(); openPerson(pid); };
@@ -283,7 +283,7 @@ function openCluster(cid) {
     t.ondblclick = async () => {
       t.classList.remove('off');
       const d = await api(`/api/faces/${t.dataset.face}`).catch(fail);
-      if (d) openStandalone(d.media_id);
+      if (d) openStandalone(d.media_id, d.id);
     };
   });
   const selected = () => [...grid.querySelectorAll('.ftile:not(.off)')].map(t => +t.dataset.face);
@@ -394,20 +394,21 @@ function openViewer(i) {
   showItem(i);
 }
 
-async function openStandalone(mediaId) {
+async function openStandalone(mediaId, faceId = null) {
   const d = await api(`/api/media/${mediaId}`).catch(fail);
   if (!d) return;
   V.standalone = { items: [d.media] };
   $('#library').hidden = true; $('#viewer').hidden = false;
-  showItem(0);
+  showItem(0, faceId);
 }
 
-function showItem(i) {
+function showItem(i, focusFace = null) {
   const list = viewerList();
   if (i < 0 || i >= list.length) return;
   exitCrop(); exitDraw();
   const m = list[i];
-  V.idx = i; V.item = m; V.zoom = 1; V.panX = V.panY = 0; V.natW = V.natH = 0; V.faces = [];
+  V.focusFace = focusFace;
+  V.idx = i; V.item = m; V.zoom = 1; V.panX = V.panY = 0; V.natW = V.natH = 0; V.faces = []; V.seekTo = null;
   const token = ++V.token;
   mediaBox.innerHTML = '';
   $('#faceList').innerHTML = '';
@@ -424,6 +425,7 @@ function showItem(i) {
       // HEVC without a decoder often "loads" with sound but no picture
       if (!el.videoWidth) return videoUnplayable(m, el, token);
       V.natW = el.videoWidth; V.natH = el.videoHeight; layout(); syncVidBar();
+      if (V.seekTo != null) { el.currentTime = V.seekTo; V.seekTo = null; }
     };
     el.onerror = () => { if (token === V.token) videoUnplayable(m, el, token); };
     for (const ev of ['play', 'pause', 'timeupdate', 'durationchange', 'volumechange', 'ended']) el.addEventListener(ev, syncVidBar);
@@ -458,12 +460,24 @@ function syncVidBar() {
   $('#vidPlay').textContent = v.paused || v.ended ? '▶' : '❚❚';
   $('#vidPlay').title = v.paused ? 'Play (Space)' : 'Pause (Space)';
   $('#vidTime').textContent = `${fmtTime(v.currentTime)} / ${fmtTime(d)}`;
+  syncFaceBoxes();
   if (!vidSeeking) $('#vidSeek').value = d ? Math.round(1000 * v.currentTime / d) : 0;
   $('#vidMute').textContent = v.muted || !v.volume ? '🔇' : '🔊';
   $('#vidVol').value = v.muted ? 0 : v.volume;
   $('#vidSpeed').value = String(v.playbackRate);
 }
 let vidSeeking = false;
+// video faces were found on one frame, so their boxes show only while paused on (about) that frame
+function syncFaceBoxes() {
+  const v = curVideo(); if (!v) return;
+  const near = t => v.paused && Math.abs(v.currentTime - t) < 0.3;
+  mediaBox.querySelectorAll('.fbox').forEach(b => b.classList.toggle('off', !near(+b.dataset.frame)));
+}
+function seekToFace(f) {
+  const v = curVideo(); if (!v || f.frame == null) return;
+  v.pause();
+  if (v.readyState >= 1) v.currentTime = f.frame; else V.seekTo = f.frame;
+}
 function togglePlay() { const v = curVideo(); if (!v || !V.natW) return; if (v.paused || v.ended) v.play().catch(() => {}); else v.pause(); }
 $('#vidPlay').onclick = togglePlay;
 $('#vidSeek').oninput = e => { const v = curVideo(); vidSeeking = true; if (v && isFinite(v.duration)) { v.currentTime = e.target.value / 1000 * v.duration; $('#vidTime').textContent = `${fmtTime(v.currentTime)} / ${fmtTime(v.duration)}`; } };
@@ -684,6 +698,11 @@ async function loadFaces(mid, token) {
   Object.assign(V.item, d.media);
   V.faces = d.faces;
   renderFaces();
+  if (V.item.kind === 'video') {
+    // opened from a face, or from a person's photos: jump to where that face was seen
+    const f = V.faces.find(x => x.id === V.focusFace) || (S.mode === 'person' && !V.standalone && V.faces.find(x => x.person_id === S.personId));
+    if (f) seekToFace(f);
+  }
   $('#fileInfo').innerHTML = `<div><b>${esc(d.media.name)}</b></div><div>${d.media.taken ? fmtDate(d.media.taken, { dateStyle: 'full' }) + ' ' + new Date(d.media.taken * 1000).toLocaleTimeString() : ''}</div>
      <div>${d.media.width && d.media.height ? `${d.media.width} × ${d.media.height}` : ''}</div><div>${esc(d.path)}</div>`;
 }
@@ -691,8 +710,10 @@ async function loadFaces(mid, token) {
 function renderFaces() {
   mediaBox.querySelectorAll('.fbox').forEach(b => b.remove());
   const list = $('#faceList');
-  if (V.item.kind === 'video') { list.innerHTML = '<div class="muted">Face tagging is for photos.</div>'; return; }
-  if (!V.faces.length) list.innerHTML = '<div class="muted">No faces found. Use <b>Tag a person</b> to draw a box around someone.</div>';
+  const vid = V.item.kind === 'video';
+  if (!V.faces.length) list.innerHTML = vid ? '<div class="muted">No faces found near the start or end of this video.</div>' :
+    '<div class="muted">No faces found. Use <b>Tag a person</b> to draw a box around someone.</div>';
+  else if (vid) list.innerHTML = '<div class="muted vidhint">Faces are looked for near the start and end of a video. Click a face to jump to it.</div>';
   else list.innerHTML = '';
   for (const f of V.faces) {
     const b = document.createElement('div');
@@ -700,6 +721,7 @@ function renderFaces() {
     Object.assign(b.style, { left: f.x * 100 + '%', top: f.y * 100 + '%', width: f.w * 100 + '%', height: f.h * 100 + '%' });
     b.innerHTML = `<span class="flabel" style="transform:translateX(-50%) rotate(var(--unrot))">${esc(f.name || (f.suggest[0] ? f.suggest[0].name + '?' : '?'))}</span>`;
     b.dataset.face = f.id;
+    if (vid) b.dataset.frame = f.frame;
     mediaBox.appendChild(b);
 
     const row = document.createElement('div');
@@ -718,7 +740,8 @@ function renderFaces() {
       inp.addEventListener('change', () => { if (S.people.some(p => p.name === inp.value.trim())) nameFace(f, { name: inp.value.trim() }); });
     }
     row.addEventListener('click', ev => {
-      const act = ev.target.dataset.act; if (!act) return;
+      const act = ev.target.dataset.act;
+      if (!act) { if (vid && !ev.target.closest('input')) seekToFace(f); return; }
       if (act === 'yes') nameFace(f, { person_id: f.suggest[0].person_id });
       if (act === 'no') rejectSuggestion(f);
       if (act === 'ignore') faceAction('/api/faces/ignore', { face_ids: [f.id] });
@@ -731,6 +754,7 @@ function renderFaces() {
     b.onclick = () => { row.scrollIntoView({ block: 'nearest' }); const i = $('input', row); if (i) i.focus(); };
     list.appendChild(row);
   }
+  syncFaceBoxes();
 }
 
 async function nameFace(f, body) {
@@ -880,10 +904,10 @@ let lastScanned = 0, lastClusterLoad = 0;
 async function pollStatus() {
   try {
     const s = await api('/api/status');
-    const pct = s.images ? Math.round(100 * s.scanned / s.images) : 100;
+    const pct = s.total ? Math.round(100 * s.scanned / s.total) : 100;
     $('#status').innerHTML = s.indexing ? 'Indexing folders…' :
       `${s.total.toLocaleString()} items · ${s.faces.toLocaleString()} faces` +
-      (s.scanned < s.images ? ` · scanning ${pct}%<span class="bar"><i style="width:${pct}%"></i></span>` :
+      (s.scanned < s.total ? ` · scanning ${pct}%<span class="bar"><i style="width:${pct}%"></i></span>` :
        s.search.enabled && s.search.done < s.search.total ? ` · analyzing for search ${Math.round(100 * s.search.done / s.search.total)}%` : '');
     S.searchIndex = s.search; S.ffmpeg = s.ffmpeg;
     if (s.total !== S.lastTotal && !s.indexing) { S.lastTotal = s.total; loadFolders(); }

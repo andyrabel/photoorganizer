@@ -157,6 +157,8 @@ code { background: #eee; padding: 0 4px; border-radius: 3px; }
 .fbox.hl { border-color: #ffd54a; box-shadow: 0 0 0 2px rgba(0,0,0,.6), 0 0 12px #ffd54a; }
 .fbox .flabel { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); margin-top: 3px; background: rgba(0,0,0,.7); color: #fff; font-size: 12px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; pointer-events: none; }
 #viewer.hide-faces .fbox { display: none; }
+.fbox.off { display: none; }
+.vidhint { font-size: 12px; margin-bottom: 8px; }
 .drawbox { position: absolute; border: 2px dashed #ffd54a; pointer-events: none; }
 #cropBox { position: absolute; box-shadow: 0 0 0 9999px rgba(0,0,0,.6); border: 1px solid rgba(255,255,255,.9); cursor: move; }
 #cropBox::before, #cropBox::after { content: ""; position: absolute; border: 0 solid rgba(255,255,255,.35); pointer-events: none; }

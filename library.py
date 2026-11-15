@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS faces(
   embedding BLOB,
   person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
   ignored INTEGER NOT NULL DEFAULT 0,
-  manual INTEGER NOT NULL DEFAULT 0);
+  manual INTEGER NOT NULL DEFAULT 0,
+  frame REAL);  -- seconds into the video the face was found at; NULL for photos
 CREATE INDEX IF NOT EXISTS faces_media ON faces(media_id);
 CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);
 CREATE TABLE IF NOT EXISTS face_rejects(
@@ -78,7 +79,12 @@ def db():
 def init():
     for d in (DATA, THUMBS, FACE_THUMBS):
         d.mkdir(parents=True, exist_ok=True)
-    db().executescript(SCHEMA)
+    conn = db()
+    conn.executescript(SCHEMA)
+    if "frame" not in {r["name"] for r in conn.execute("PRAGMA table_info(faces)")}:
+        # videos used to be scanned for metadata only; scan them again for faces
+        conn.execute("ALTER TABLE faces ADD COLUMN frame REAL")
+        conn.execute("UPDATE media SET scanned=0 WHERE kind='video' AND scanned=1")
 
 
 # ---------------------------------------------------------------- config / roots
@@ -235,45 +241,55 @@ def next_pending(conn, exclude=()):
     return row["id"] if row else None
 
 
+VIDEO_SAME_FACE = 0.5  # SFace cosine above which two faces in one video are the same person
 _claim_lock = threading.Lock()
 _claimed = set()
 
 
 def process_media(mid, engine):
     """Read metadata + detect faces for one media row."""
-    from imaging import load_for_detection, video_info
+    from PIL import Image
+    from imaging import load_for_detection, video_face_frames, video_info
     conn = db()
     m = conn.execute("SELECT * FROM media WHERE id=?", (mid,)).fetchone()
     if m is None:
         return
     try:
         if m["kind"] == "video":
-            w, h, taken = video_info(m["path"])
-            conn.execute("UPDATE media SET width=?, height=?, taken=COALESCE(?, taken), scanned=1 WHERE id=?",
-                         (w, h, taken, mid))
-            return
-        bgr, full_w, full_h, exif = load_for_detection(m["path"])
-        taken = parse_exif_date(exif) if exif is not None else None
-        dh, dw = bgr.shape[:2]
-        found = engine.detect(bgr)
+            full_w, full_h, taken = video_info(m["path"])
+            # (seconds, bgr) for a frame near the start and one near the end
+            frames = [(t, np.ascontiguousarray(np.asarray(im)[:, :, ::-1]))
+                      for t, im in video_face_frames(m["path"])]
+        else:
+            bgr, full_w, full_h, exif = load_for_detection(m["path"])
+            taken = parse_exif_date(exif) if exif is not None else None
+            frames = [(None, bgr)]
+        found, kept = [], []
+        for t, bgr in frames:
+            dh, dw = bgr.shape[:2]
+            for (x, y, w, h, score, emb) in engine.detect(bgr):
+                # the same person in both video frames: keep only the first sighting
+                if t is not None and any(float(emb @ k) >= VIDEO_SAME_FACE for k in kept):
+                    continue
+                kept.append(emb)
+                found.append((t, bgr, {"x": x / dw, "y": y / dh, "w": w / dw, "h": h / dh}, min(w, h), score, emb))
         conn.execute("BEGIN")
         conn.execute("UPDATE media SET width=?, height=?, taken=COALESCE(?, taken), scanned=1 WHERE id=?",
                      (full_w, full_h, taken, mid))
         new_faces = []
-        for (x, y, w, h, score, emb) in found:
-            face = {"x": x / dw, "y": y / dh, "w": w / dw, "h": h / dh}
+        for t, bgr, face, size, score, emb in found:
             cur = conn.execute(
-                "INSERT INTO faces(media_id,x,y,w,h,size_px,score,embedding) VALUES(?,?,?,?,?,?,?,?)",
-                (mid, face["x"], face["y"], face["w"], face["h"], float(min(w, h)), float(score),
-                 emb.astype(np.float32).tobytes()))
-            new_faces.append((cur.lastrowid, face))
+                "INSERT INTO faces(media_id,x,y,w,h,size_px,score,embedding,frame) VALUES(?,?,?,?,?,?,?,?,?)",
+                (mid, face["x"], face["y"], face["w"], face["h"], float(size), float(score),
+                 emb.astype(np.float32).tobytes(), t))
+            new_faces.append((cur.lastrowid, face, bgr))
         conn.execute("COMMIT")
         if new_faces:  # cut face thumbnails now, while the decoded image is in memory
-            from PIL import Image
             from imaging import make_face_thumb_from
-            pil = Image.fromarray(np.ascontiguousarray(bgr[:, :, ::-1]))
-            for fid, face in new_faces:
+            pils = {}
+            for fid, face, bgr in new_faces:
                 try:
+                    pil = pils.get(id(bgr)) or pils.setdefault(id(bgr), Image.fromarray(np.ascontiguousarray(bgr[:, :, ::-1])))
                     make_face_thumb_from(pil, face, FACE_THUMBS / f"{fid}.jpg")
                 except Exception:
                     pass
@@ -308,17 +324,17 @@ def worker_loop():
 
 def backfill_face_thumbs():
     """Cut any missing face thumbnails (one image decode per photo) so People views load fast."""
-    from imaging import DETECT_SIDE, load_oriented, make_face_thumb_from
-    rows = db().execute("""SELECT f.id, f.x, f.y, f.w, f.h, f.media_id, m.path FROM faces f
+    from imaging import load_face_source, make_face_thumb_from
+    rows = db().execute("""SELECT f.id, f.x, f.y, f.w, f.h, f.frame, f.media_id, m.path FROM faces f
                            JOIN media m ON m.id=f.media_id WHERE f.ignored=0
                            ORDER BY f.person_id IS NULL, f.media_id""").fetchall()
     by_media = {}
     for r in rows:
         if not (FACE_THUMBS / f"{r['id']}.jpg").exists():
-            by_media.setdefault(r["media_id"], []).append(r)
+            by_media.setdefault((r["media_id"], r["frame"]), []).append(r)
     for faces in by_media.values():
         try:
-            im = load_oriented(faces[0]["path"], DETECT_SIDE)
+            im = load_face_source(faces[0]["path"], faces[0]["frame"])
             for f in faces:
                 out = FACE_THUMBS / f"{f['id']}.jpg"
                 if not out.exists():
@@ -341,7 +357,7 @@ def status():
     r = conn.execute("""SELECT
         SUM(missing=0) total,
         SUM(missing=0 AND kind='image') images,
-        SUM(missing=0 AND kind='image' AND scanned!=0) scanned,
+        SUM(missing=0 AND scanned!=0) scanned,
         SUM(missing=0 AND kind='video') videos
         FROM media""").fetchone()
     faces = conn.execute("SELECT COUNT(*) c FROM faces WHERE ignored=0").fetchone()["c"]

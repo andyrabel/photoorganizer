@@ -57,6 +57,56 @@ def video_frame(path):
         cap.release()
 
 
+def _frame_at(cap, t):
+    cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, t) * 1000)
+    ok, frame = cap.read()
+    return Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)) if ok else None
+
+
+def video_frame_at(path, t, max_side=DETECT_SIDE):
+    """The frame at `t` seconds (orientation applied by OpenCV), downscaled to max_side."""
+    cap = cv2.VideoCapture(path)
+    try:
+        im = _frame_at(cap, t)
+    finally:
+        cap.release()
+    if im is None:
+        raise IOError(f"cannot decode video frame at {t:.2f}s")
+    im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    return im
+
+
+def video_face_frames(path, max_side=DETECT_SIDE):
+    """[(seconds, PIL image)] for face detection: one frame near the start and one near the end."""
+    cap = cv2.VideoCapture(path)
+    try:
+        fps, n = cap.get(cv2.CAP_PROP_FPS), cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        dur = n / fps if fps and n and n > 0 else 0
+        if dur < 2:
+            times = [dur / 2]
+        else:
+            times = [min(0.5, dur * 0.1), dur - min(0.5, dur * 0.1)]
+        out = []
+        for i, t in enumerate(times):
+            im = _frame_at(cap, t)
+            if im is None and i:  # seeking near the end can fail; back off a little
+                t = dur * 0.9
+                im = _frame_at(cap, t)
+            if im is not None:
+                im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+                out.append((round(t, 3), im))
+        if not out:
+            raise IOError("cannot decode video")
+        return out
+    finally:
+        cap.release()
+
+
+def load_face_source(path, frame=None):
+    """The image faces were detected on: the photo, or the video frame at `frame` seconds."""
+    return video_frame_at(path, frame) if frame is not None else load_oriented(path, DETECT_SIDE)
+
+
 def video_info(path):
     """(width, height, creation timestamp or None) for a video."""
     cap = cv2.VideoCapture(path)
@@ -133,7 +183,8 @@ def make_thumb(media, out_path, size=320):
 
 
 def make_face_thumb(media_path, face, out_path, size=160):
-    make_face_thumb_from(load_oriented(media_path, DETECT_SIDE), face, out_path, size)
+    frame = face["frame"] if "frame" in face.keys() else None
+    make_face_thumb_from(load_face_source(media_path, frame), face, out_path, size)
 
 
 def make_face_thumb_from(im, face, out_path, size=160):

@@ -141,7 +141,7 @@ def api_search():
 @app.get("/api/media/<int:mid>")
 def api_media_detail(mid):
     m = media_row(mid)
-    if m["kind"] == "image" and m["scanned"] == 0:
+    if m["scanned"] == 0:
         from faces import shared_engine
         engine, lock = shared_engine()
         with lock:
@@ -153,9 +153,9 @@ def api_media_detail(mid):
 
 def faces_for_media(mid):
     from faces import best_people_for
-    rows = db().execute("""SELECT f.id, f.x, f.y, f.w, f.h, f.person_id, f.manual, p.name
+    rows = db().execute("""SELECT f.id, f.x, f.y, f.w, f.h, f.frame, f.person_id, f.manual, p.name
                            FROM faces f LEFT JOIN people p ON p.id=f.person_id
-                           WHERE f.media_id=? AND f.ignored=0 ORDER BY f.x""", (mid,)).fetchall()
+                           WHERE f.media_id=? AND f.ignored=0 ORDER BY f.frame, f.x""", (mid,)).fetchall()
     unnamed = [r["id"] for r in rows if r["person_id"] is None]
     sugg = best_people_for(unnamed) if unnamed else {}
     names = {r["id"]: r["name"] for r in db().execute("SELECT id, name FROM people")}
@@ -375,7 +375,7 @@ def api_ignore():
 
 @app.get("/api/faces/<int:fid>")
 def api_face(fid):
-    f = db().execute("SELECT id, media_id, person_id FROM faces WHERE id=?", (fid,)).fetchone()
+    f = db().execute("SELECT id, media_id, person_id, frame FROM faces WHERE id=?", (fid,)).fetchone()
     if f is None:
         abort(404)
     return jsonify(dict(f))

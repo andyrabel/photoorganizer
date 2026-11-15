@@ -5,7 +5,7 @@ A Picasa-style photo and video organizer that runs locally and is used in your w
 - **Left pane:** **People** (named people, plus `<Unknown Person>` groups of similar faces) and **Folders** (grouped by year, with counts).
 - **Right pane:** thumbnail library, and a photo/video viewer with zoom, pan, rotate and crop.
 - **Describe-a-photo search:** type what you remember ("kids opening presents", "sunset at the beach") in the ✦ box. An AI image model ranks your photos and video frames by how well they match. It runs on your computer, so nothing is uploaded.
-- **Faces:** detected automatically in the background. Name a face in the viewer, and the app suggests other photos of the same person to confirm (✓) or reject (✗).
+- **Faces:** detected automatically in the background, in photos and in videos (a frame near the start and one near the end). Name a face in the viewer, and the app suggests other photos of the same person to confirm (✓) or reject (✗).
 
 Everything stays on your machine. Edits are non-destructive: rotation and crop are stored in the
 app's database, and your original files are never modified. **Save copy** writes a new
@@ -78,7 +78,9 @@ names and edits, but not your photos.
 
 - Describe-a-photo search is good at scenes, objects and activities ("birthday cake", "snowy street", "people on a boat").
   It does not know who people are. Use People for that. It also cannot read dates or places.
-- The first face scan of a large library takes a while (about 0.3–0.5 s per photo over `/mnt/c`). The folder you have open is scanned first.
+- The first face scan of a large library takes a while (about 0.3–0.5 s per photo and 0.8 s per video over `/mnt/c`). The folder you have open is scanned first.
+- In a video, a face's box shows only while the video is paused on the frame where the face was found. Click the face in the side panel to jump there.
+  Someone who appears only in the middle of a clip won't be found.
 - Videos play in the viewer with their own control bar (Space plays and pauses, and a click on the picture does the same). The bar stays upright when you rotate a video.
 - Formats the browser can't play (iPhone HEVC `.mov`, AVI, WMV and others) are converted to H.264 MP4 the first time you open them.
   The converted copy is cached in `data/video/`, and the original is not touched. This needs ffmpeg, either on `PATH` or from `pip install imageio-ffmpeg`.

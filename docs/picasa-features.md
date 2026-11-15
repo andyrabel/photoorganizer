@@ -32,7 +32,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 
 | Picasa feature | Notes | Status |
 |---|---|---|
-| Automatic face detection | Runs in the background over the whole library | ✅ OpenCV YuNet detector; scans the folder you are viewing first |
+| Automatic face detection | Runs in the background over the whole library | ✅ OpenCV YuNet detector; scans the folder you are viewing first. Videos: a frame near the start and one near the end |
 | Face recognition / grouping | Clusters similar faces into `<Unknown Person>` groups | ✅ SFace embeddings and greedy clustering |
 | Name a face in the viewer | Name box under each face, with autocomplete | ✅ |
 | Suggested matches | "Is this *X*?" with ✓/✗ for each suggestion; batch confirm | ✅ per-person suggestion strip and per-face suggestion in the viewer |
