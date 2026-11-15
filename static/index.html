@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo Organizer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='3' width='14' height='11' rx='2' fill='%234a7fc1'/><circle cx='8' cy='8.5' r='3' fill='white'/></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="22" height="22"><rect x="2" y="5" width="20" height="15" rx="3" fill="#4a7fc1"/><circle cx="12" cy="12.5" r="4.2" fill="#fff"/><circle cx="12" cy="12.5" r="2.4" fill="#4a7fc1"/><rect x="7" y="3" width="6" height="3" rx="1" fill="#4a7fc1"/></svg>
+    <span>Photo Organizer</span>
+  </div>
+  <div class="tb-group">
+    <button id="btnFolders" title="Choose which folders on disk are watched">Folder Manager…</button>
+    <button id="btnRescan" title="Look for new or changed files">Rescan</button>
+  </div>
+  <div class="tb-spacer"></div>
+  <input id="filter" type="search" placeholder="Filter by file name…" autocomplete="off">
+  <div id="status" title="Background indexing and face scanning progress"></div>
+</header>
+
+<div id="main">
+  <aside id="left">
+    <section class="sec" data-sec="people">
+      <h3 class="sec-head"><span class="tri"></span>People <span class="cnt" id="peopleCount"></span></h3>
+      <div class="sec-body" id="peopleList"></div>
+    </section>
+    <section class="sec" data-sec="folders">
+      <h3 class="sec-head"><span class="tri"></span>Folders <span class="cnt" id="folderCount"></span></h3>
+      <div class="sec-body" id="folderList"></div>
+    </section>
+  </aside>
+  <div id="splitter"></div>
+
+  <main id="right">
+    <!-- Library (thumbnail) view -->
+    <div id="library">
+      <div id="libHeader"></div>
+      <div id="libExtra"></div>
+      <div id="grid"></div>
+      <div id="empty" hidden></div>
+      <footer id="libFooter">
+        <span id="libInfo"></span>
+        <label class="sizer">Thumbnail size <input id="thumbSize" type="range" min="90" max="320" value="170"></label>
+      </footer>
+    </div>
+
+    <!-- Photo / video viewer -->
+    <div id="viewer" hidden>
+      <div id="vToolbar">
+        <button id="vBack" title="Back to library (Esc)">◀ Back to Library</button>
+        <span class="sep"></span>
+        <button id="vPrev" title="Previous (←)">‹</button>
+        <button id="vNext" title="Next (→)">›</button>
+        <span class="sep"></span>
+        <button id="vZoomOut" title="Zoom out (−)">−</button>
+        <button id="vFit" title="Fit to window (0)">Fit</button>
+        <button id="v100" title="Actual size (1)">1:1</button>
+        <button id="vZoomIn" title="Zoom in (+)">+</button>
+        <span id="vZoomLabel"></span>
+        <span class="sep"></span>
+        <button id="vRotL" title="Rotate counter-clockwise ([)">⟲</button>
+        <button id="vRotR" title="Rotate clockwise (])">⟳</button>
+        <button id="vCrop" title="Crop (C)">Crop</button>
+        <button id="vReset" title="Undo all edits to this item">Reset edits</button>
+        <button id="vExport" title="Save an edited copy next to the original">Save copy</button>
+        <span class="sep"></span>
+        <button id="vAddFace" title="Draw a box around a face the scanner missed">Tag a person</button>
+        <label class="chk"><input type="checkbox" id="vShowFaces" checked> Show faces</label>
+        <div class="tb-spacer"></div>
+        <span id="vName"></span>
+      </div>
+      <div id="cropBar" hidden>
+        <span>Drag to choose the area to keep.</span>
+        <label>Aspect
+          <select id="cropAspect">
+            <option value="0">Free</option>
+            <option value="orig">Original</option>
+            <option value="1">Square 1:1</option>
+            <option value="1.5">4×6 (3:2)</option>
+            <option value="0.6667">6×4 (2:3)</option>
+            <option value="1.4">5×7</option>
+            <option value="0.7143">7×5</option>
+            <option value="1.3333">4:3</option>
+            <option value="0.75">3:4</option>
+            <option value="1.7778">16:9</option>
+          </select>
+        </label>
+        <button id="cropApply" class="primary">Apply</button>
+        <button id="cropClear">Remove crop</button>
+        <button id="cropCancel">Cancel</button>
+      </div>
+      <div id="vBody">
+        <div id="stage">
+          <div id="viewport"><div id="plane"><div id="mediaBox"></div></div></div>
+          <div id="stageMsg" hidden></div>
+        </div>
+        <aside id="facePanel">
+          <h4>People in this photo</h4>
+          <div id="faceList"></div>
+          <div id="fileInfo"></div>
+        </aside>
+      </div>
+      <div id="filmstrip"></div>
+    </div>
+  </main>
+</div>
+
+<dialog id="dlgFolders">
+  <h3>Folder Manager</h3>
+  <p class="muted">These folders (and everything inside them) are watched for photos and videos. Windows paths such as <code>C:\Users\me\Pictures</code> are fine.</p>
+  <ul id="rootList"></ul>
+  <form id="addRootForm"><input id="addRootPath" placeholder="Folder path to add" required><button class="primary">Add</button></form>
+  <div class="dlg-actions"><button id="dlgFoldersClose">Done</button></div>
+</dialog>
+
+<div id="toast" hidden></div>
+<datalist id="peopleNames"></datalist>
+<script src="/static/app.js"></script>
+</body>
+</html>
