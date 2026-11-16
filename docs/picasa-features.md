@@ -11,7 +11,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 | Picasa feature | Notes | Status |
 |---|---|---|
 | Watched folders / Folder Manager | Picks which disk folders to scan, and keeps watching them for changes | ✅ Folder Manager dialog. Changes are found with **Rescan**, not live file watching |
-| Folder list grouped by year | Flat list of folders with counts, under year headings | ✅ |
+| Folder list grouped by year | Flat list of folders with counts, under year headings | ✅ future dates count as "Year unknown", listed last |
 | Folder tree view | Alternative hierarchical view (View → Folder View → Tree) | ⬜ |
 | Library thumbnail grid ("lightbox") | Thumbnail size slider, drop shadows, hover info | ✅ |
 | Albums (virtual) | Collections that don't move files; one photo can be in several albums | ⬜ — **high value** |
@@ -36,7 +36,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 | Face recognition / grouping | Clusters similar faces into `<Unknown Person>` groups | ✅ SFace embeddings and greedy clustering |
 | Name a face in the viewer | Name box under each face, with autocomplete | ✅ |
 | Suggested matches | "Is this *X*?" with ✓/✗ for each suggestion; batch confirm | ✅ per-person suggestion strip (height-capped, can be hidden) and per-face suggestion in the viewer |
-| A person's photos | Album of everyone tagged, newest first | ✅ grouped under year headings, with date and file name under each picture |
+| A person's photos | Album of everyone tagged, newest first | ✅ grouped under year headings, with date and file name under each picture; future dates go under "Year unknown", last |
 | Manually add a face | Draw a box where detection missed someone | ✅ "Tag a person" |
 | Ignore a face | Hide faces you don't care about (strangers, posters) | ✅ |
 | Merge / rename / delete a person | Renaming onto an existing name merges the two | ✅ |

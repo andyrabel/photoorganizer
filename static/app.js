@@ -79,11 +79,13 @@ function folderLabel(f) {
   return last;
 }
 
-// Year for grouping: prefer a year in the path (e.g. PhotoSync/2020/08), else the earliest photo date
+// Year for grouping: prefer a year in the path (e.g. PhotoSync/2020/08), else the earliest photo date.
+// Years still in the future are wrong (the server already drops such photo dates), so they count as unknown.
+const NO_YEAR = 'Year unknown';
 function folderYear(f) {
   const m = f.rel.match(/(?:^|\/)((?:19|20)\d\d)(?:\/|$)/);
-  if (m) return +m[1];
-  return f.first ? new Date(f.first * 1000).getFullYear() : 'Undated';
+  if (m && +m[1] <= new Date().getFullYear()) return +m[1];
+  return f.first ? new Date(f.first * 1000).getFullYear() : NO_YEAR;
 }
 function folderSortKey(f) {
   const m = f.rel.match(/(?:^|\/)((?:19|20)\d\d)\/(\d{1,2})(?:\/|$)/);
@@ -127,7 +129,7 @@ function renderFolders() {
     if (!byYear.has(y)) byYear.set(y, []);
     byYear.get(y).push(f);
   }
-  const years = [...byYear.keys()].sort((a, b) => (b === 'Undated') - (a === 'Undated') || b - a);
+  const years = [...byYear.keys()].sort((a, b) => (a === NO_YEAR) - (b === NO_YEAR) || b - a);   // unknown year last
   // a year can be collapsed to its heading; while the filter box is in use every match is shown
   const shut = new Set(store.get('shutYears', []));
   const open = y => q || !shut.has(String(y));
@@ -432,7 +434,7 @@ function renderGrid() {
     if (y !== year) {
       year = y;
       let n = 0; for (let j = i; j < S.shown.length && (S.shown[j].taken ? new Date(S.shown[j].taken * 1000).getFullYear() : null) === y; j++) n++;
-      head = `<h3 class="ghead">${y ?? 'No date'} <span class="muted">${n}</span></h3>`;
+      head = `<h3 class="ghead">${y ?? NO_YEAR} <span class="muted">${n}</span></h3>`;
     }
     return `${head}<div class="tile" data-i="${i}" title="${title}">
       <div class="timg"><img loading="lazy" decoding="async" src="${thumbUrl(m)}" alt="">${badges(m)}</div>

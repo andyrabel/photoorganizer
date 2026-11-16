@@ -227,9 +227,13 @@ class ClipIndex:
 index = ClipIndex()
 
 
-def search(query, limit=200):
-    """[(media_id, score)] best first for a free-text description."""
+def search(query, limit=200, within=None):
+    """[(media_id, score)] best first for a free-text description.
+    `within`: only rank these media ids (e.g. the photos of the people named in the search)."""
     ids, mat = index.get()
+    if within is not None:
+        keep = np.isin(ids, np.fromiter(within, dtype=np.int64))
+        ids, mat = ids[keep], mat[keep]
     if not len(ids):
         return []
     q = engine().embed_text(query)

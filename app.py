@@ -30,9 +30,19 @@ def media_row(mid):
     return m
 
 
+def known_taken(ts):
+    """A photo date, or None when it is in the future (a camera clock that was never set):
+    such photos are shown as "year unknown" instead of under a year that has not happened yet."""
+    return ts if ts and ts <= future_cutoff() else None
+
+
+def future_cutoff():
+    return time.time() + 86400   # a day of slack for time zones
+
+
 def media_json(m):
     return {"id": m["id"], "name": m["name"], "folder": m["folder"], "kind": m["kind"],
-            "taken": m["taken"], "width": m["width"], "height": m["height"],
+            "taken": known_taken(m["taken"]), "width": m["width"], "height": m["height"],
             "rotation": m["rotation"], "crop": json.loads(m["crop"]) if m["crop"] else None,
             "ver": m["edit_ver"],
             **({"converted": video.playable_path(m["id"]).exists()} if m["kind"] == "video" else {})}
@@ -84,9 +94,9 @@ def api_remove_root():
 @app.get("/api/folders")
 def api_folders():
     roots = lib.load_config()["roots"]
-    rows = db().execute("""SELECT folder, COUNT(*) n, MIN(taken) first, MAX(taken) last,
-                           SUM(kind='video') videos
-                           FROM media WHERE missing=0 GROUP BY folder""").fetchall()
+    rows = db().execute("""SELECT folder, COUNT(*) n, MIN(CASE WHEN taken<=:c THEN taken END) first,
+                           MAX(CASE WHEN taken<=:c THEN taken END) last, SUM(kind='video') videos
+                           FROM media WHERE missing=0 GROUP BY folder""", {"c": future_cutoff()}).fetchall()
     out = []
     for r in rows:
         root = root_of(r["folder"], roots)
@@ -109,7 +119,8 @@ def api_media():
     elif person:
         rows = conn.execute("""SELECT DISTINCT m.* FROM media m JOIN faces f ON f.media_id=m.id
                                WHERE f.person_id=? AND f.ignored=0 AND m.missing=0
-                               ORDER BY m.taken DESC, m.name""", (int(person),)).fetchall()
+                               ORDER BY m.taken IS NULL OR m.taken>?, m.taken DESC, m.name""",
+                            (int(person), future_cutoff())).fetchall()
     else:
         abort(400)
     return jsonify(items=[media_json(m) for m in rows])
