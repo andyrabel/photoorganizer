@@ -1047,7 +1047,8 @@ function renderYears() {
         <option value="high">High confidence (${counts.high})</option>
         <option value="medium">High and medium (${counts.high + counts.medium})</option>
         <option value="low">All suggestions (${counts.high + counts.medium + counts.low})</option></select></label>
-      <button id="ySelAll">Select all shown</button><button id="ySelNone">Select none</button>
+      <button id="ySelPage" title="Only the files loaded on screen so far" hidden>Select all on screen</button>
+      <button id="ySelAll" title="Every file in this list, including ones not loaded yet">Select all (${shown.length.toLocaleString()})</button><button id="ySelNone">Select none</button>
       <button id="yMove" class="primary" ${Y.sel.size ? '' : 'disabled'}>Move ${plural(Y.sel.size, 'selected file')}</button>
     </div><div class="muted">The suggestion comes from the date the camera recorded, any date in the file or folder name, and (weakly) when the file was last changed.
       Scanner dates and digital dates on pre-digital photos count for little: they say when a print was scanned, not taken.
@@ -1092,8 +1093,10 @@ function renderYears() {
       'Every photo and video in a year folder (such as …/2021/…) matches its year. 🎉'}</div>`;
   } else if (Y.folders.length) html += '<h4 class="fsub">Files in the wrong year folder</h4>';
   let n = 0;
+  const onScreen = [];
   for (const [, list] of groups) {
     if (n >= T.limit) break;
+    onScreen.push(...list);
     const a0 = list[0], allSel = list.every(a => Y.sel.has(a.id));
     html += `<section class="ygroup"><div class="yghead"><label><input type="checkbox" data-group="${esc(a0.media.folder + '\n' + a0.target)}" ${allSel ? 'checked' : ''}>
       <span class="yfrom">${esc(relPath(a0.media.folder))}</span></label> <span class="arrow">→</span> <span class="yto">${esc(relPath(a0.target))}</span>
@@ -1118,6 +1121,11 @@ function renderYears() {
     (Y.folders.length ? ` · ${plural(Y.folders.length, 'folder suggestion')}` : '');
   const rerender = () => { const st = grid.scrollTop; renderYears(); grid.scrollTop = st; };
   const more = $('#yMore'); if (more) more.onclick = () => { T.limit += 200; rerender(); };
+  const sp = $('#ySelPage');
+  if (sp && n < shown.length) {
+    sp.hidden = false; sp.textContent = `Select all on screen (${n.toLocaleString()})`;
+    sp.onclick = () => { onScreen.forEach(a => Y.sel.add(a.id)); rerender(); };
+  }
   const fa = $('#fApply'); if (fa) fa.onclick = applyFolders;
   grid.onchange = e => {
     const cb = e.target; if (cb.type !== 'checkbox') return;
@@ -1325,7 +1333,8 @@ function renderJunk() {
       <label>Show <select id="jLevel"><option value="high">High confidence</option><option value="medium">High and medium</option><option value="low">Everything found</option></select></label>
     </div>
     <div class="extra-head">
-      <button id="jSelAll">Select all shown</button><button id="jSelNone">Select none</button>
+      ${shown.length > T.limit ? `<button id="jSelPage" title="Only the pictures loaded on screen so far">Select all on screen (${Math.min(shown.length, T.limit).toLocaleString()})</button>` : ''}
+      <button id="jSelAll" title="Every picture in this list, including ones not loaded yet">Select all (${shown.length.toLocaleString()})</button><button id="jSelNone">Select none</button>
       <span class="sep"></span>
       <button id="jKeep" ${nSel ? '' : 'disabled'} title="Not junk: a personal photo. It will not be suggested again.">Keep (not junk)</button>
       <button id="jBook" ${nSel ? '' : 'disabled'} title="Book art: always kept, and listed under Illustrations & book art">Mark as book art</button>
@@ -1338,7 +1347,9 @@ function renderJunk() {
   $('#jLevel').value = J.level;
   $('#jLevel').onchange = e => { J.level = e.target.value; store.set('junkLevel', J.level); T.limit = 120; renderJunk(); };
   $('#libExtra .jcats').onclick = e => { const b = e.target.closest('button'); if (!b) return; J.cat = b.dataset.cat; store.set('junkCat', J.cat); T.limit = 120; renderJunk(); $('#grid').scrollTop = 0; };
-  $('#jSelAll').onclick = () => { shown.forEach(a => { if (a.marked !== 'book') J.sel.add(a.id); }); rerenderJunk(); };
+  const selectJunk = list => { list.forEach(a => { if (a.marked !== 'book') J.sel.add(a.id); }); rerenderJunk(); };
+  $('#jSelAll').onclick = () => selectJunk(shown);
+  const sp = $('#jSelPage'); if (sp) sp.onclick = () => selectJunk(shown.slice(0, T.limit));
   $('#jSelNone').onclick = () => { J.sel.clear(); rerenderJunk(); };
   $('#jKeep').onclick = () => markJunk('keep');
   $('#jBook').onclick = () => markJunk('book');
