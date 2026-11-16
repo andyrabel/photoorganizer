@@ -244,7 +244,7 @@ async function openPerson(pid, keepScroll = false) {
   const p = personById(pid);
   if (!p) return;
   setHeader(`${p.cover ? `<img class="avatar" src="${faceUrl(p.cover)}">` : ''}
-    <div><h2>${esc(p.name)}</h2><div class="sub">${p.n} photo${p.n === 1 ? '' : 's'}</div></div>
+    <div><div class="titlerow"><h2>${esc(p.name)}</h2><span class="companions" id="pCompanions"></span></div><div class="sub">${p.n} photo${p.n === 1 ? '' : 's'}</div></div>
     <div class="actions"><button id="pRename">Rename…</button><button id="pDelete">Delete person</button></div>`);
   $('#pRename').onclick = async () => {
     const name = prompt('Rename person (use an existing name to merge):', p.name);
@@ -259,11 +259,21 @@ async function openPerson(pid, keepScroll = false) {
     await api(`/api/people/${pid}`, { method: 'DELETE' }).catch(fail);
     await loadPeople(); loadClusters(); S.mode = null; setHeader(''); setItems([]); $('#libExtra').innerHTML = '';
   };
+  loadCompanions(pid);
   const grid = $('#grid'); const st = keepScroll ? grid.scrollTop : 0;
   const d = await api('/api/media?person=' + pid);
   if (S.mode !== 'person' || S.personId !== pid) return;
   setItems(d.items); grid.scrollTop = st;
   loadSuggestions(pid);
+}
+
+async function loadCompanions(pid) {
+  const d = await api(`/api/people/${pid}/companions`).catch(() => ({ companions: [] }));
+  const box = $('#pCompanions');
+  if (!box || S.mode !== 'person' || S.personId !== pid || !d.companions.length) return;
+  box.innerHTML = 'Often with ' + d.companions.map(c =>
+    `<a href="#" data-pid="${c.id}" title="${c.n} photo${c.n === 1 ? '' : 's'} together">${esc(c.name)}</a>`).join(', ');
+  box.querySelectorAll('a').forEach(a => a.onclick = e => { e.preventDefault(); openPerson(+a.dataset.pid); });
 }
 
 async function loadSuggestions(pid) {
@@ -354,13 +364,14 @@ function openCluster(cid) {
   $('#nameInput').focus();
 }
 
-// Describe-a-photo search: ranked by an on-device image/text model (CLIP)
+// The ✦ search: names from People ("Tze and Sam", "@Tze") pick whose photos to look in, "oldest"/"newest"
+// sorts by date, and any description left over is ranked by an on-device image/text model (CLIP)
 async function openSearch(q) {
   leaveTool(); S.mode = 'search'; S.query = q;
   selectLeft(); showLibrary();
   const head = sub => setHeader(`<div class="big-ico ai">✦</div>
     <div><h2>“${esc(q)}”</h2><div class="sub">${sub}</div></div>`);
-  head('Searching…'); S.searchDone = false;
+  head('Searching…'); S.searchDone = false; S.searchByDate = false;
   $('#libExtra').innerHTML = '';
   setItems([]);
   let d;
@@ -369,10 +380,16 @@ async function openSearch(q) {
   if (S.mode !== 'search' || S.query !== q) return;
   const n = d.items.length;
   const si = S.searchIndex;
-  const partial = si && si.done < si.total
+  const partial = d.description && si && si.done < si.total
     ? ` · still analyzing your library (${Math.round(100 * si.done / si.total)}% done), so more matches may appear later` : '';
-  S.searchDone = true;
-  head(n ? `${n} closest match${n === 1 ? '' : 'es'}, best first${partial}` : `No matches${partial}`);
+  const ppl = d.people.map(esc);
+  const who = ppl.length < 2 ? ppl.join('') : ppl.slice(0, -1).join(', ') + (d.match === 'any' ? ' or ' : ' and ') + ppl.at(-1);
+  const what = [who && (d.match === 'any' || ppl.length < 2 ? `with ${who}` : `with ${who} together`),
+                d.description && `that look like “${esc(d.description)}”`].filter(Boolean).join(' ');
+  const order = { best: 'best first', oldest: 'oldest first', newest: 'newest first' }[d.order];
+  S.searchDone = true; S.searchByDate = d.order !== 'best';
+  head((n ? `${n} match${n === 1 ? '' : 'es'}${what ? ' ' + what : ''}, ${order}` : `No matches${what ? ' ' + what : ''}`) +
+       partial + (d.note ? ` · ${esc(d.note)}` : ''));
   setItems(d.items);
 }
 $('#aiForm').onsubmit = e => {
@@ -421,7 +438,7 @@ $('#kindSeg').addEventListener('click', e => { const b = e.target.closest('butto
 function renderGrid() {
   const grid = $('#grid');
   // a person's photos come newest first: group them under year headings, with date and name under each picture
-  const byYear = S.mode === 'person';
+  const byYear = S.mode === 'person' || (S.mode === 'search' && S.searchByDate);
   grid.className = byYear ? 'captioned' : '';
   const badges = m => (m.kind === 'video' ? '<span class="vid">▶ video</span>' : '') + (m.rotation || m.crop ? '<span class="edited">edited</span>' : '');
   let year = undefined;
@@ -444,7 +461,7 @@ function renderGrid() {
   empty.hidden = !!S.shown.length || !S.mode;
   empty.textContent = S.items.length ? (S.kind !== 'all' && !S.items.some(m => m.kind === S.kind)
       ? `No ${KIND_WORD[S.kind]} here. Showing ${KIND_WORD[S.kind]} only: choose All at the bottom to see everything.` : 'Nothing matches the filter.') :
-    S.mode === 'search' && S.searchDone ? 'No photos match that description. Try different words.' : 'Loading…';
+    S.mode === 'search' && S.searchDone ? 'No photos match that search. Try different words.' : 'Loading…';
   const vids = S.shown.filter(m => m.kind === 'video').length;
   const hidden = S.items.length - S.shown.length;
   const photos = S.shown.length - vids;

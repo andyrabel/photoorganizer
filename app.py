@@ -3,6 +3,7 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 import threading
 import time
 
@@ -126,21 +127,134 @@ def api_media():
     return jsonify(items=[media_json(m) for m in rows])
 
 
+# ---- the ✦ search box: names from People, "oldest"/"newest", and a description for CLIP
+
+PHOTO_WORD = r"(?:photos?|pictures?|pics?|images?|videos?|shots?|ones?)"
+ORDER_RE = re.compile(rf"(?<!\w)(?:(oldest|earliest)|(newest|latest|most recent)|(first)(?=\s+{PHOTO_WORD}(?!\w))"
+                      rf"|(last)(?=\s+{PHOTO_WORD}(?!\w)))(?!\w)", re.I)
+# words that say nothing about what is in the picture: if only these are left, there is no description
+FILLER = set("""photo photos picture pictures pic pics image images video videos shot shots one ones of with and or
+                & + , the a an show me find all every together both my our""".split())
+POSSESSIVE = r"(?:['’]s)?"
+
+
+class SearchError(Exception):
+    pass
+
+
+def parse_search(q):
+    """Split a search into ([person ids], match "all"|"any", order "oldest"|"newest"|None, description).
+    People are found by name anywhere in the text ("Tze and Sam at the beach"), or marked with
+    @Name / @"Full Name" when a name could be mistaken for an ordinary word."""
+    people = sorted(((r["id"], r["name"]) for r in db().execute("SELECT id, name FROM people")),
+                    key=lambda p: -len(p[1]))
+    by_name = {n.lower(): pid for pid, n in people}
+    found = []
+    text = re.sub(r"\s+", " ", q)
+
+    # @Name: the longest name in People that the text after @ starts with
+    out, i = [], 0
+    while (j := text.find("@", i)) >= 0:
+        out.append(text[i:j])
+        rest = text[j + 1:]
+        m = re.match(r'"([^"]+)"', rest) or re.match(r"“([^”]+)”", rest)
+        if m:
+            pid = by_name.get(m.group(1).strip().lower())
+            if pid is None:
+                raise SearchError(f"There is no one called “{m.group(1).strip()}” in People.")
+        else:
+            m = next(filter(None, (re.match(re.escape(n) + POSSESSIVE + r"(?!\w)", rest, re.I) for _, n in people)), None)
+            if not m:
+                word = re.match(r"[\w'’.-]*", rest).group(0).rstrip(".'’")
+                if not word:
+                    out.append("@"); i = j + 1
+                    continue
+                raise SearchError(f"There is no one called “{word}” in People. Check the spelling, "
+                                  f'or use @"First Last" for a name with a space in it.')
+            pid = by_name[re.sub(POSSESSIVE + "$", "", m.group(0)).lower()]
+        found.append(pid)
+        out.append(" ")
+        i = j + 1 + m.end()
+    text = "".join(out) + text[i:]
+
+    # plain names anywhere in the text, longest first so "Mary Ann" wins over "Mary"
+    for pid, n in people:
+        if len(n) < 2:
+            continue
+        text, hits = re.subn(r"(?<!\w)" + re.escape(n) + POSSESSIVE + r"(?!\w)", " ", text, flags=re.I)
+        if hits:
+            found.append(pid)
+    found = list(dict.fromkeys(found))
+
+    order = None
+    if m := ORDER_RE.search(text):
+        order = "oldest" if m.group(1) or m.group(3) else "newest"
+        text = text[:m.start()] + " " + text[m.end():]
+
+    words = text.split()
+    match = "any" if len(found) > 1 and any(w.lower() == "or" for w in words) else "all"
+    described = any(w.lower().strip(",.!?;:") not in FILLER | {""} for w in words)
+    words = [w for w in words if w.lower() not in ("and", "or", "&", "+", ",")]
+    while described and words[0].lower() in FILLER:     # "photo of at the beach" -> "at the beach"
+        words.pop(0)
+    desc = " ".join(words) if described else ""
+    return found, match, order, desc
+
+
+def date_key(m):
+    """Sort key for oldest first: photos without a (believable) date go last."""
+    t = m["taken"]
+    return (t is None, t or 0, m["name"].lower())
+
+
 @app.get("/api/search")
 def api_search():
-    """Describe-a-photo search: rank photos by how well they match a free-text description."""
+    """The ✦ search: photos of named people, ranked by a description (CLIP) and/or sorted by date."""
     import semantic
     q = (request.args.get("q") or "").strip()
     if not q:
         abort(400)
-    if not semantic.available():
-        return jsonify(error="Describe-a-photo search needs the CLIP model files - see README.md"), 503
-    hits = semantic.search(q)
-    if not hits:
-        return jsonify(items=[])
-    rows = {m["id"]: m for m in db().execute(
-        "SELECT * FROM media WHERE missing=0 AND id IN (%s)" % ",".join("?" * len(hits)), [h[0] for h in hits])}
-    return jsonify(items=[dict(media_json(rows[mid]), score=round(s, 3)) for mid, s in hits if mid in rows])
+    try:
+        people, match, order, desc = parse_search(q)
+    except SearchError as e:
+        return jsonify(error=str(e)), 400
+    if not people and not desc:
+        return jsonify(error="Describe the photo, or name someone from People (for example: oldest photo of @Tze)."), 400
+    note = ""
+    if desc and not semantic.available():
+        if not people:
+            return jsonify(error="Describe-a-photo search needs the CLIP model files - see README.md"), 503
+        note = f"“{desc}” was ignored: describing photos needs the CLIP model files"
+        desc = ""
+
+    conn = db()
+    pool = None
+    if people:
+        need = 1 if match == "any" else len(people)
+        pool = {r["id"]: r for r in conn.execute(
+            f"""SELECT m.* FROM media m WHERE m.missing=0 AND m.id IN (
+                  SELECT media_id FROM faces WHERE ignored=0 AND person_id IN ({",".join("?" * len(people))})
+                  GROUP BY media_id HAVING COUNT(DISTINCT person_id) >= ?)""", (*people, need))}
+    scores = {}
+    if desc:
+        hits = semantic.search(desc, within=pool.keys() if pool is not None else None)
+        scores = dict(hits)
+        if pool is None:
+            pool = {r["id"]: r for r in conn.execute(
+                "SELECT * FROM media WHERE missing=0 AND id IN (%s)" % ",".join("?" * len(hits)),
+                [h[0] for h in hits])} if hits else {}
+        ids = [mid for mid, _ in hits if mid in pool]
+    else:
+        ids = list(pool)
+    items = [dict(media_json(pool[mid]), **({"score": round(scores[mid], 3)} if mid in scores else {})) for mid in ids]
+    if order or not desc:
+        order = order or "newest"
+        items.sort(key=date_key)
+        if order == "newest":   # newest first, but undated photos stay at the end
+            items = [m for m in items if m["taken"]][::-1] + [m for m in items if not m["taken"]]
+    names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM people")}
+    return jsonify(items=items, people=[names[p] for p in people], match=match,
+                   order=order or "best", description=desc, note=note)
 
 
 @app.get("/api/media/<int:mid>")
@@ -453,6 +567,17 @@ def api_person_faces(pid):
     rows = db().execute("SELECT id, media_id FROM faces WHERE person_id=? AND ignored=0 ORDER BY id DESC",
                         (pid,)).fetchall()
     return jsonify(faces=[dict(r) for r in rows])
+
+
+@app.get("/api/people/<int:pid>/companions")
+def api_person_companions(pid):
+    """The named people who most often share a photo with this person."""
+    rows = db().execute("""SELECT o.person_id id, p.name, COUNT(DISTINCT o.media_id) n
+           FROM faces f JOIN faces o ON o.media_id=f.media_id
+           JOIN people p ON p.id=o.person_id JOIN media m ON m.id=f.media_id
+           WHERE f.person_id=? AND f.ignored=0 AND o.ignored=0 AND o.person_id!=? AND m.missing=0
+           GROUP BY o.person_id ORDER BY n DESC, p.name COLLATE NOCASE LIMIT 5""", (pid, pid)).fetchall()
+    return jsonify(companions=[dict(r) for r in rows])
 
 
 @app.get("/api/unknown")

@@ -100,6 +100,10 @@ code { background: #eee; padding: 0 4px; border-radius: 3px; }
 #libHeader .big-ico { width: 52px; height: 42px; }
 #libHeader .avatar { width: 56px; height: 56px; border-radius: 4px; object-fit: cover; border: 1px solid #bbb; }
 #libHeader h2 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-weight: 400; font-size: 26px; }
+#libHeader .titlerow { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+#libHeader .companions { color: var(--muted); font-size: 13px; }
+#libHeader .companions a { color: inherit; }
+#libHeader .companions a:hover { color: #1a5fb4; }
 #libHeader .sub { font-family: Georgia, serif; color: #444; }
 #libHeader .path { color: var(--muted); font-size: 12px; }
 #libHeader .actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }

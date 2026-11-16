@@ -18,7 +18,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 | Stars / favorites | Star a photo; *Starred Photos* album; "show starred only" filter | ⬜ — **high value, cheap** |
 | Captions and folder descriptions | "Add a description" under a folder title; per-photo captions (stored in IPTC for JPEGs) | ⬜ |
 | Tags (keywords) | Free-text tags, Quick Tags buttons, tag search | ⬜ |
-| Search box | Instant search over filenames, captions, tags, people, folder names and camera info | 🟡 filename filter only |
+| Search box | Instant search over filenames, captions, tags, people, folder names and camera info | 🟡 filename filter, plus the ✦ box: people by name (`@Name`, several at once, "and"/"or"), oldest/newest, and a description |
 | Filters bar | Show only starred / video / faces / geotagged items, plus a minimum-date slider | ⬜ |
 | Timeline view | Browse all folders chronologically with a date scrubber | ⬜ |
 | Hide folders / hide photos | Remove items from view without deleting them | ⬜ |
@@ -39,6 +39,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 | A person's photos | Album of everyone tagged, newest first | ✅ grouped under year headings, with date and file name under each picture; future dates go under "Year unknown", last |
 | Manually add a face | Draw a box where detection missed someone | ✅ "Tag a person" |
 | Ignore a face | Hide faces you don't care about (strangers, posters) | ✅ |
+| Who appears with whom | People who are often photographed together | ✅ "Often with" next to the name on a person's page (top five, clickable) |
 | Merge / rename / delete a person | Renaming onto an existing name merges the two | ✅ |
 | Choose a person's thumbnail | "Set as thumbnail" | 🟡 the API supports `cover_face`; no UI yet |
 | People as contacts | Link a person to Google Contacts or an email address | ⬜ |
