@@ -151,9 +151,19 @@ def year_folder(rel):
     return None
 
 
+def _dt(ts):
+    """datetime for a timestamp, or None when it is missing or impossible (e.g. a broken file date in year 30828)."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromtimestamp(ts)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def _fmt(ts):
-    d = datetime.fromtimestamp(ts)
-    return f"{d.day} {d:%b %Y}"
+    d = _dt(ts)
+    return f"{d.day} {d:%b %Y}" if d else "unknown date"
 
 
 def _now_year():
@@ -173,8 +183,8 @@ def _own_evidence(m, era_year=None):
     era_year: the year the file is believed to be from (its year folder, or a decade in a folder name);
     a digital date long after a pre-digital year is treated as the date the print was scanned."""
     ev = []
-    if m["meta_date"]:
-        d = datetime.fromtimestamp(m["meta_date"])
+    d = _dt(m["meta_date"])
+    if d:
         src = m["meta_src"] or ("video" if m["kind"] == "video" else "camera")
         w, what, note = {
             "camera": (W_CAMERA, "Camera date", ""),
@@ -242,8 +252,8 @@ def _evidence(m, rel_parts, yi, siblings):
         total = sum(siblings.values())
         if n / total >= 0.8:
             ev.append((top, None, W_SIBLINGS, f"{n} of {total} other dated files in this folder are from {top}"))
-    if m["mtime"]:
-        d = datetime.fromtimestamp(m["mtime"])
+    d = _dt(m["mtime"])
+    if d:
         if _meta_ok(d.year):
             ev.append((d.year, d.month, W_MODIFIED, f"File last modified: {_fmt(m['mtime'])}"))
     return ev
@@ -264,8 +274,9 @@ def _level(confidence):
 
 def _strong_year(m):
     """The year the file's own (trustworthy) metadata gives, for counting what the rest of a folder says."""
-    if m["meta_date"] and (m["meta_src"] or "camera") in ("camera", "video", "screen", "device"):
-        return datetime.fromtimestamp(m["meta_date"]).year
+    d = _dt(m["meta_date"])
+    if d and (m["meta_src"] or "camera") in ("camera", "video", "screen", "device"):
+        return d.year
     return None
 
 
@@ -396,7 +407,7 @@ def _year_guess(files, name_ev, era=None):
             months.setdefault(y, Counter())[mo] += 3
     mtime_only = False
     if not support:
-        mt = Counter(datetime.fromtimestamp(m["mtime"]).year for m in files if m["mtime"])
+        mt = Counter(d.year for d in map(_dt, (m["mtime"] for m in files)) if d)
         if mt:
             y, c = mt.most_common(1)[0]
             support[y] = W_MODIFIED * c / sum(mt.values())
@@ -558,8 +569,8 @@ def analyze_folders(rows, roots):
         sy = _segment_year(seg)
         if not sy:
             continue
-        dated = [datetime.fromtimestamp(m["meta_date"]) for m in files
-                 if m["meta_date"] and (m["meta_src"] or "camera") in ("camera", "video", "device")]
+        dated = [d for d in (_dt(m["meta_date"]) for m in files
+                             if (m["meta_src"] or "camera") in ("camera", "video", "device")) if d]
         if len(dated) < 3:
             continue
         (y, n_y), = Counter(d.year for d in dated).most_common(1)
@@ -846,8 +857,9 @@ def _keep_order(m, roots):
     in_right_year = False
     rt = root_of(m["folder"], roots)
     yf = year_folder(os.path.relpath(m["folder"], rt)) if rt else None
-    if yf and m["meta_date"]:
-        in_right_year = datetime.fromtimestamp(m["meta_date"]).year == yf[1]
+    d = _dt(m["meta_date"])
+    if yf and d:
+        in_right_year = d.year == yf[1]
     return (-((m["width"] or 0) * (m["height"] or 0)),         # highest resolution
             bool(COPY_NAME.search(os.path.splitext(m["name"])[0])),  # not "photo (2).jpg" / "copy"
             not in_right_year,                                  # already in the right year folder
