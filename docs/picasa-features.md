@@ -36,6 +36,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 | Face recognition / grouping | Clusters similar faces into `<Unknown Person>` groups | ✅ SFace embeddings and greedy clustering |
 | Name a face in the viewer | Name box under each face, with autocomplete | ✅ |
 | Suggested matches | "Is this *X*?" with ✓/✗ for each suggestion; batch confirm | ✅ per-person suggestion strip (height-capped, can be hidden) and per-face suggestion in the viewer |
+| A person's photos | Album of everyone tagged, newest first | ✅ grouped under year headings, with date and file name under each picture |
 | Manually add a face | Draw a box where detection missed someone | ✅ "Tag a person" |
 | Ignore a face | Hide faces you don't care about (strangers, posters) | ✅ |
 | Merge / rename / delete a person | Renaming onto an existing name merges the two | ✅ |

@@ -418,10 +418,26 @@ $('#kindSeg').addEventListener('click', e => { const b = e.target.closest('butto
 
 function renderGrid() {
   const grid = $('#grid');
-  grid.className = '';
-  grid.innerHTML = S.shown.map((m, i) => `<div class="tile" data-i="${i}" title="${esc(m.name)}${m.taken ? ' — ' + fmtDate(m.taken) : ''}">
-      <img loading="lazy" decoding="async" src="${thumbUrl(m)}" alt="">
-      ${m.kind === 'video' ? '<span class="vid">▶ video</span>' : ''}${m.rotation || m.crop ? '<span class="edited">edited</span>' : ''}</div>`).join('');
+  // a person's photos come newest first: group them under year headings, with date and name under each picture
+  const byYear = S.mode === 'person';
+  grid.className = byYear ? 'captioned' : '';
+  const badges = m => (m.kind === 'video' ? '<span class="vid">▶ video</span>' : '') + (m.rotation || m.crop ? '<span class="edited">edited</span>' : '');
+  let year = undefined;
+  grid.innerHTML = S.shown.map((m, i) => {
+    const title = `${esc(m.name)}${m.taken ? ' — ' + fmtDate(m.taken) : ''}`;
+    if (!byYear) return `<div class="tile" data-i="${i}" title="${title}">
+      <img loading="lazy" decoding="async" src="${thumbUrl(m)}" alt="">${badges(m)}</div>`;
+    const y = m.taken ? new Date(m.taken * 1000).getFullYear() : null;
+    let head = '';
+    if (y !== year) {
+      year = y;
+      let n = 0; for (let j = i; j < S.shown.length && (S.shown[j].taken ? new Date(S.shown[j].taken * 1000).getFullYear() : null) === y; j++) n++;
+      head = `<h3 class="ghead">${y ?? 'No date'} <span class="muted">${n}</span></h3>`;
+    }
+    return `${head}<div class="tile" data-i="${i}" title="${title}">
+      <div class="timg"><img loading="lazy" decoding="async" src="${thumbUrl(m)}" alt="">${badges(m)}</div>
+      <div class="cap"><div>${m.taken ? fmtDate(m.taken) : '&nbsp;'}</div><div class="cname">${esc(m.name)}</div></div></div>`;
+  }).join('');
   const empty = $('#empty');
   empty.hidden = !!S.shown.length || !S.mode;
   empty.textContent = S.items.length ? (S.kind !== 'all' && !S.items.some(m => m.kind === S.kind)

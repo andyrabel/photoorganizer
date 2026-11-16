@@ -117,6 +117,14 @@ code { background: #eee; padding: 0 4px; border-radius: 3px; }
 .tile.sel img { outline: 3px solid var(--select); }
 .tile .vid { position: absolute; left: 8px; bottom: 8px; background: rgba(0,0,0,.6); color: #fff; font-size: 11px; padding: 1px 6px; border-radius: 3px; }
 .tile .edited { position: absolute; right: 8px; top: 8px; background: rgba(255,255,255,.85); font-size: 10px; padding: 0 5px; border-radius: 3px; }
+#grid.captioned { row-gap: 14px; }
+#grid.captioned .ghead { grid-column: 1 / -1; margin: 14px 0 0; padding-bottom: 4px; border-bottom: 1px solid #eee; font-size: 18px; font-weight: 600; }
+#grid.captioned .ghead:first-child { margin-top: 0; }
+#grid.captioned .ghead .muted { font-size: 13px; font-weight: 400; margin-left: 6px; }
+#grid.captioned .tile { aspect-ratio: auto; flex-direction: column; justify-content: flex-start; contain-intrinsic-size: var(--thumb) calc(var(--thumb) + 36px); }
+#grid.captioned .timg { position: relative; width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; }
+#grid.captioned .cap { width: 100%; margin-top: 6px; text-align: center; font-size: 12px; line-height: 1.35; color: var(--muted); }
+#grid.captioned .cname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #libFooter { display: flex; align-items: center; gap: 16px; padding: 5px 16px; border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; color: var(--muted); }
 #libFooter .sizer { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 
