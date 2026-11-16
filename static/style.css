@@ -281,16 +281,18 @@ button.danger-btn:not(:disabled):hover { border-color: var(--bad); background: l
 /* ---------- year check: whole folders ---------- */
 .fbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 7px 12px; margin-bottom: 10px; background: #f6f9fd; border: 1px solid var(--accent-soft); border-radius: 6px; font-size: 13px; }
 .fsub { margin: 18px 0 8px; font-size: 14px; }
-.frow { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #f0f0f0; }
-.fsec .yghead + .frow { border-top: 0; }
+.yfrow { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-top: 1px solid #f0f0f0; }
+.fsec .yghead + .yfrow { border-top: 0; }
 .fthumbs { display: grid; grid-template-columns: repeat(3, 40px); grid-auto-rows: 40px; gap: 2px; flex: none; width: 124px; }
 .fthumbs img { width: 40px; height: 40px; object-fit: cover; border-radius: 2px; background: #eee; cursor: zoom-in; }
-.frow .yname { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.frow .yname a { color: var(--text); font-weight: 600; text-decoration: none; word-break: break-all; }
-.frow .yname a:hover { color: var(--accent); text-decoration: underline; }
+.yfrow .yname { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.yfrow .yname a { color: var(--text); font-weight: 600; text-decoration: none; word-break: break-all; }
+.yfrow .yname a:hover { color: var(--accent); text-decoration: underline; }
 .faction { margin-top: 4px; font-size: 12px; }
 .faction .yto { color: var(--ok); word-break: break-all; }
 .fguess .yr { font-size: 22px; }
+.yfrow .yverdict { max-width: 220px; }
+.yfrow .yverdict .yr.old { word-break: break-word; }
 .conf.none { color: #666; background: #f6f6f6; border-color: #ddd; }
 
 /* ---------- junk finder ---------- */

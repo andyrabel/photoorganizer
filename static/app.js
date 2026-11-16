@@ -1019,7 +1019,7 @@ function folderRow(f, Y) {
   const guess = f.kind === 'split' ? `<div class="fguess"><span class="yr new">${f.split[0][0]}–${f.split[f.split.length - 1][0]}</span></div>` :
     f.kind === 'name' ? `<div><span class="yr old">${esc(f.path.split('/').pop())}</span></div>` :
     f.year ? `<div class="fguess">${f.mtime_only ? '≈ ' : ''}<span class="yr new">${f.year}</span></div>` : '<div class="fguess"><span class="yr old">?</span></div>';
-  return `<div class="frow" data-path="${esc(f.path)}">
+  return `<div class="yfrow" data-path="${esc(f.path)}">
     <input type="checkbox" ${canApply ? '' : 'disabled'} ${Y.fsel.has(f.path) ? 'checked' : ''} aria-label="Apply this suggestion">
     <div class="fthumbs">${f.sample.map(m => `<img loading="lazy" src="${thumbUrl(m)}" data-fopen="${m.id}" title="${esc(m.name)}">`).join('')}</div>
     <div class="yinfo"><div class="yname">${FOLDER_SVG} <a href="#" data-folder="${esc(f.path)}" title="Open this folder">${esc(relPath(f.path))}</a>
@@ -1129,7 +1129,7 @@ function renderYears() {
   const fa = $('#fApply'); if (fa) fa.onclick = applyFolders;
   grid.onchange = e => {
     const cb = e.target; if (cb.type !== 'checkbox') return;
-    const fr = cb.closest('.frow');
+    const fr = cb.closest('.yfrow');
     if (fr) { cb.checked ? Y.fsel.add(fr.dataset.path) : Y.fsel.delete(fr.dataset.path); }
     else if (cb.dataset.group != null) { for (const a of shown) if (a.media.folder + '\n' + a.target === cb.dataset.group) cb.checked ? Y.sel.add(a.id) : Y.sel.delete(a.id); }
     else { const id = +cb.closest('.yrow').dataset.id; cb.checked ? Y.sel.add(id) : Y.sel.delete(id); }
@@ -1144,7 +1144,7 @@ function renderYears() {
     const fo = e.target.dataset.folder;
     if (fo) { e.preventDefault(); if (S.folders.some(f => f.path === fo)) openFolder(fo); else toast('That folder has no pictures of its own; its subfolders do.'); return; }
     const fid = e.target.dataset.fopen;
-    if (fid) { const f = Y.folders.find(x => x.path === e.target.closest('.frow').dataset.path); return openList(f.sample, f.sample.findIndex(m => m.id === +fid)); }
+    if (fid) { const f = Y.folders.find(x => x.path === e.target.closest('.yfrow').dataset.path); return openList(f.sample, f.sample.findIndex(m => m.id === +fid)); }
     const id = e.target.dataset.open; if (!id) return;
     const list = shown.map(a => a.media);
     openList(list, list.findIndex(m => m.id === +id));
