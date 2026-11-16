@@ -35,7 +35,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 | Automatic face detection | Runs in the background over the whole library | ✅ OpenCV YuNet detector; scans the folder you are viewing first. Videos: a frame near the start and one near the end |
 | Face recognition / grouping | Clusters similar faces into `<Unknown Person>` groups | ✅ SFace embeddings and greedy clustering |
 | Name a face in the viewer | Name box under each face, with autocomplete | ✅ |
-| Suggested matches | "Is this *X*?" with ✓/✗ for each suggestion; batch confirm | ✅ per-person suggestion strip and per-face suggestion in the viewer |
+| Suggested matches | "Is this *X*?" with ✓/✗ for each suggestion; batch confirm | ✅ per-person suggestion strip (height-capped, can be hidden) and per-face suggestion in the viewer |
 | Manually add a face | Draw a box where detection missed someone | ✅ "Tag a person" |
 | Ignore a face | Hide faces you don't care about (strangers, posters) | ✅ |
 | Merge / rename / delete a person | Renaming onto an existing name merges the two | ✅ |

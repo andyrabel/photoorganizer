@@ -130,6 +130,8 @@ code { background: #eee; padding: 0 4px; border-radius: 3px; }
 .yes { color: var(--ok); font-weight: 700; }
 .no { color: var(--bad); font-weight: 700; }
 .extra-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.extra-head .push-right { margin-left: auto; }
+.faces-row.sg-list { max-height: 45vh; overflow-y: auto; padding-right: 4px; }
 .extra-head h4 { margin: 0; font-size: 14px; }
 .pill { background: #fff6d6; border: 1px solid #e3cf7d; border-radius: 12px; padding: 2px 10px; font-size: 12px; }
 

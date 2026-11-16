@@ -272,10 +272,18 @@ async function loadSuggestions(pid) {
   const p = personById(pid);
   const list = d.suggestions.slice(0, 60);
   if (!list.length) { box.innerHTML = `<span class="muted">No suggested matches for ${esc(p.name)} right now. More appear as photos are scanned and more faces are confirmed.</span>`; return; }
-  box.innerHTML = `<div class="extra-head"><h4>Is this ${esc(p.name)}? <span class="muted">(${d.suggestions.length} suggested match${d.suggestions.length === 1 ? '' : 'es'})</span></h4>
+  const count = `<span class="muted">(${d.suggestions.length} suggested match${d.suggestions.length === 1 ? '' : 'es'})</span>`;
+  if (store.get('hideSuggest', false)) {
+    box.innerHTML = `<div class="extra-head"><h4>Is this ${esc(p.name)}? ${count}</h4>
+      <button id="sgToggle">Show suggestions</button></div>`;
+    $('#sgToggle').onclick = () => { store.set('hideSuggest', false); loadSuggestions(pid); };
+    return;
+  }
+  box.innerHTML = `<div class="extra-head"><h4>Is this ${esc(p.name)}? ${count}</h4>
       <button id="sgAll" class="primary">✓ Yes to all shown</button><button id="sgNone">✗ No to all shown</button>
-      <span class="muted">Click a face to open its photo.</span></div>
-    <div class="faces-row">${list.map(s => `<div class="ftile" data-face="${s.face_id}" data-media="${s.media_id}" title="similarity ${Math.round(s.score * 100)}%">
+      <span class="muted">Click a face to open its photo.</span>
+      <button id="sgToggle" class="push-right">Hide suggestions</button></div>
+    <div class="faces-row sg-list">${list.map(s => `<div class="ftile" data-face="${s.face_id}" data-media="${s.media_id}" title="similarity ${Math.round(s.score * 100)}%">
       <img loading="lazy" src="${faceUrl(s.face_id)}"><div class="btns"><button class="yes" title="Yes">✓</button><button class="no" title="No">✗</button></div>
       ${Math.round(s.score * 100)}%</div>`).join('')}</div>`;
   const done = () => { if (!box.querySelector('.ftile')) { refreshPeopleSoon(); openPerson(pid, true); } };
@@ -285,6 +293,7 @@ async function loadSuggestions(pid) {
     $('.no', t).onclick = async () => { t.remove(); await post('/api/faces/reject', { face_ids: [fid], person_id: pid }).catch(fail); done(); };
     $('img', t).onclick = () => openStandalone(+t.dataset.media, +t.dataset.face);
   });
+  $('#sgToggle').onclick = () => { store.set('hideSuggest', true); loadSuggestions(pid); };
   const ids = () => [...box.querySelectorAll('.ftile')].map(t => +t.dataset.face);
   $('#sgAll').onclick = async () => { const f = ids(); await post('/api/faces/assign', { face_ids: f, person_id: pid }).catch(fail); toast(`Added ${f.length} faces to ${p.name}`); refreshPeopleSoon(); openPerson(pid); };
   $('#sgNone').onclick = async () => { await post('/api/faces/reject', { face_ids: ids(), person_id: pid }).catch(fail); loadSuggestions(pid); };
