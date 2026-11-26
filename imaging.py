@@ -242,6 +242,16 @@ def export_edited(media, crop):
     return out
 
 
+def render_shareable(media, out_path, max_side=None):
+    """A JPEG of a photo with its rotation/crop applied, optionally shrunk (e.g. to email size)."""
+    import json
+    crop = json.loads(media["crop"]) if media["crop"] else None
+    im = apply_edits(load_oriented(media["path"]), media["rotation"], crop)
+    if max_side:
+        im.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+    _save_atomic(im, out_path, quality=88)
+
+
 def _save_atomic(im, out_path, quality):
     tmp = f"{out_path}.{os.getpid()}.{id(im)}.tmp"
     im.save(tmp, "JPEG", quality=quality)

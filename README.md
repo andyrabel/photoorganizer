@@ -6,9 +6,16 @@ A Picasa-style photo and video organizer that runs locally and is used in your w
 - **Right pane:** thumbnail library, and a photo/video viewer with zoom, pan, rotate and crop.
 - **Describe-a-photo search:** type what you remember ("kids opening presents", "sunset at the beach") in the ✦ box. An AI image model ranks your photos and video frames by how well they match. It runs on your computer, so nothing is uploaded.
   - **People in a search:** use names from People to look only at their photos: "Tze at the beach", or "Tze and Sam" for photos with both of them ("Tze or Sam" for photos with either). Put `@` in front of a name to make sure it's read as a person, for example when the name is also an ordinary word (`@Rose in the garden`); use `@"Mary Ann"` for a name with a space in it. A name after `@` that isn't in People is reported as an error rather than ignored.
+  - Every search result shows its date and file name underneath.
   - **Oldest / newest:** add "oldest", "earliest", "newest", "latest" or "most recent" ("first photo" and "last photo" work too) to sort the results by date, under year headings. "Oldest photo of Tze" shows all of Tze's photos, oldest first. A search with only names lists the photos newest first; one with a description lists the best matches first unless you ask for a date order.
 - **Faces:** detected automatically in the background, in photos and in videos (a frame near the start and one near the end). Name a face in the viewer, and the app suggests other photos of the same person to confirm (✓) or reject (✗). On a person's page the suggestions take up at most about half the screen (scroll within them), and **Hide suggestions** folds them away so you can see that person's photos; **Show suggestions** brings them back. The choice is remembered. A person's photos are shown newest first under year headings, with the date and file name under each picture. Next to the person's name, **Often with** lists the five people who most often appear in photos with them; click a name to go to that person.
 - **Dates in the future** (usually a camera whose clock was never set) are treated as unknown: those photos are listed under **Year unknown**, after all the real years, both on a person's page and in the folder list.
+- **Share** (viewer toolbar, or press **S**): send the photo you're looking at to someone, or find it on disk.
+  - **Share…** opens the Windows share window (Mail, Outlook, Nearby sharing and other apps) with an email-size copy of the photo.
+  - **Copy picture** copies an email-size copy; paste it into an email or chat with Ctrl+V.
+  - **Download email-size copy** (at most 2048 pixels wide or tall) and **Download full size** save a JPEG to your Downloads folder. Your rotation and crop are applied; the original is unchanged.
+  - **Show in File Explorer** opens the folder with the file selected, ready to drag into an email or attach. **Copy file location** copies its full path (such as `C:\Users\you\Pictures\…`).
+  - Videos can be shared, downloaded and shown in File Explorer as they are (no email-size version).
 - **Photos / Videos switch** (bottom of the library): show everything, only photos, or only videos. It applies to folders, people, search results and the tools below.
 - **Folders** can be collapsed by year: click a year heading. **Collapse all**, **Expand all** and **Jump to…** are at the top of the list.
 - **Year check:** finds photos and videos that seem to be in the wrong year folder (any folder path with a year in it, such as `PhotoSync/2019/11`). It also makes a best guess, with a confidence percentage, for every folder that is *not* in a year folder (`No Year`, `Angie's Early Years`, `Camera Roll` and the like), and flags event folders whose name gives the wrong year or month. Selected files and folders can then be moved (or renamed) to match.
@@ -139,7 +146,9 @@ The junk finder only sees pictures the describe-a-photo search has analyzed. The
   They are usually resized or re-saved copies, but can also be burst shots, so check before removing. Double-click to open one.
 
 The copy to keep is chosen in this order: highest resolution, a name that doesn't look like a copy (`copy`, `(2)`, `_edited`),
-already in the right year folder, then the largest file. Byte-for-byte copies of the kept file are marked for removal; you can change any choice.
+not in a catch-all folder (Downloads, Desktop, Temp, New folder, ...), already in the right year folder, then the largest file.
+Byte-for-byte copies of the kept file are marked for removal; you can change any choice. In a set of two, clicking the
+file being kept swaps the choice, so the other one is kept instead.
 **Remove** moves files to a hidden `.removed-duplicates` folder inside the watched folder (on the same drive, so it's instant).
 **Put them all back** restores them. **Delete them permanently** empties the folder. The app never deletes a file any other way.
 

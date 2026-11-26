@@ -4,6 +4,8 @@ import json
 import mimetypes
 import os
 import re
+import shutil
+import subprocess
 import threading
 import time
 
@@ -293,6 +295,64 @@ def api_media_file(mid):
     ext = os.path.splitext(m["path"])[1].lower()
     mime = VIDEO_MIME.get(ext) or mimetypes.guess_type(m["path"])[0] or "application/octet-stream"
     return send_file(m["path"], mimetype=mime, conditional=True, max_age=3600)
+
+
+EMAIL_SIDE = 2048
+SHARE_DIR = lib.DATA / "share"
+
+
+def windows_path(p):
+    """How Windows sees a path: /mnt/c/x/y.jpg -> C:\\x\\y.jpg; other WSL paths go through \\\\wsl.localhost."""
+    if re.match(r"^/mnt/[a-z](/|$)", p):
+        return p[5].upper() + ":\\" + p[7:].replace("/", "\\")
+    return "\\\\wsl.localhost\\" + os.environ.get("WSL_DISTRO_NAME", "Ubuntu") + p.replace("/", "\\")
+
+
+@app.get("/api/media/<int:mid>/download")
+def api_download(mid):
+    """The file to share or save. Photos with edits, or at email size, are rendered as a JPEG;
+    everything else is the original file. ?attach=1 makes the browser save it."""
+    from imaging import render_shareable
+    m = media_row(mid)
+    email = request.args.get("size") == "email"
+    stem, ext = os.path.splitext(m["name"])
+    path, name = m["path"], m["name"]
+    if m["kind"] == "image" and (email or m["rotation"] or m["crop"]):
+        SHARE_DIR.mkdir(parents=True, exist_ok=True)
+        out = SHARE_DIR / f"{mid}_{m['edit_ver']}_{'email' if email else 'full'}.jpg"
+        if not out.exists():
+            for old in SHARE_DIR.glob(f"{mid}_*.jpg"):
+                old.unlink(missing_ok=True)
+            try:
+                render_shareable(m, out, EMAIL_SIDE if email else None)
+            except Exception as e:
+                return jsonify(error=f"Could not prepare the picture: {e}"), 500
+        path, name = str(out), stem + ".jpg"
+    if not os.path.exists(path):
+        return jsonify(error="The file is no longer on disk."), 404
+    mime = VIDEO_MIME.get(os.path.splitext(path)[1].lower()) or mimetypes.guess_type(path)[0] or "application/octet-stream"
+    return send_file(path, mimetype=mime, as_attachment=request.args.get("attach") == "1",
+                     download_name=name, max_age=0)
+
+
+@app.get("/api/media/<int:mid>/location")
+def api_location(mid):
+    m = media_row(mid)
+    return jsonify(path=m["path"], windows=windows_path(m["path"]))
+
+
+@app.post("/api/media/<int:mid>/reveal")
+def api_reveal(mid):
+    """Open File Explorer on the Windows side with this file selected."""
+    m = media_row(mid)
+    if not os.path.exists(m["path"]):
+        return jsonify(error="The file is no longer on disk."), 404
+    exe = shutil.which("explorer.exe") or ("/mnt/c/Windows/explorer.exe" if os.path.exists("/mnt/c/Windows/explorer.exe") else None)
+    if not exe:
+        return jsonify(error="File Explorer is not available (is this running under WSL?)."), 400
+    subprocess.Popen([exe, "/select," + windows_path(m["path"])], cwd="/mnt/c" if os.path.isdir("/mnt/c") else None,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return jsonify(ok=True)
 
 
 @app.get("/api/media/<int:mid>/play")

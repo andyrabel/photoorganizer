@@ -437,18 +437,20 @@ $('#kindSeg').addEventListener('click', e => { const b = e.target.closest('butto
 
 function renderGrid() {
   const grid = $('#grid');
-  // a person's photos come newest first: group them under year headings, with date and name under each picture
+  // a person's photos come newest first: group them under year headings, with date and name under each picture.
+  // Search results always get the date and name; year headings only when they are in date order.
   const byYear = S.mode === 'person' || (S.mode === 'search' && S.searchByDate);
-  grid.className = byYear ? 'captioned' : '';
+  const captioned = byYear || S.mode === 'search';
+  grid.className = captioned ? 'captioned' : '';
   const badges = m => (m.kind === 'video' ? '<span class="vid">▶ video</span>' : '') + (m.rotation || m.crop ? '<span class="edited">edited</span>' : '');
   let year = undefined;
   grid.innerHTML = S.shown.map((m, i) => {
     const title = `${esc(m.name)}${m.taken ? ' — ' + fmtDate(m.taken) : ''}`;
-    if (!byYear) return `<div class="tile" data-i="${i}" title="${title}">
+    if (!captioned) return `<div class="tile" data-i="${i}" title="${title}">
       <img loading="lazy" decoding="async" src="${thumbUrl(m)}" alt="">${badges(m)}</div>`;
     const y = m.taken ? new Date(m.taken * 1000).getFullYear() : null;
     let head = '';
-    if (y !== year) {
+    if (byYear && y !== year) {
       year = y;
       let n = 0; for (let j = i; j < S.shown.length && (S.shown[j].taken ? new Date(S.shown[j].taken * 1000).getFullYear() : null) === y; j++) n++;
       head = `<h3 class="ghead">${y ?? NO_YEAR} <span class="muted">${n}</span></h3>`;
@@ -511,7 +513,7 @@ async function openStandalone(mediaId, faceId = null) {
 function showItem(i, focusFace = null) {
   const list = viewerList();
   if (i < 0 || i >= list.length) return;
-  exitCrop(); exitDraw();
+  exitCrop(); exitDraw(); closeShare();
   const m = list[i];
   V.focusFace = focusFace;
   V.idx = i; V.item = m; V.zoom = 1; V.panX = V.panY = 0; V.natW = V.natH = 0; V.faces = []; V.seekTo = null;
@@ -964,11 +966,91 @@ $('#vExport').onclick = async () => {
   if (S.mode === 'folder') api('/api/media?folder=' + encodeURIComponent(S.folder)).then(d => { S.items = d.items; gridDirty = true; });
 };
 
+// ------------------------------------------------------------------ share menu
+const shareMenu = $('#shareMenu');
+const SH = { key: null, blob: null };   // the email-size file for the current item, fetched when the menu opens
+const shareUrl = (m, size, attach) => `/api/media/${m.id}/download?size=${size}&v=${m.ver}${attach ? '&attach=1' : ''}`;
+const shareName = m => m.kind === 'image' ? m.name.replace(/\.[^.]+$/, '') + '.jpg' : m.name;
+
+function shareBlob(m) {
+  const key = `${m.id}:${m.ver}`;
+  if (SH.key !== key) {
+    SH.key = key;
+    SH.blob = fetch(shareUrl(m, 'email')).then(async r => {
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+      return r.blob();
+    });
+    SH.blob.catch(() => { if (SH.key === key) SH.key = null; });
+  }
+  return SH.blob;
+}
+
+function closeShare() { shareMenu.hidden = true; $('#vShare').classList.remove('on'); }
+function openShare() {
+  const m = V.item; if (!m) return;
+  const img = m.kind === 'image';
+  const file = () => new File([], shareName(m), { type: img ? 'image/jpeg' : 'video/mp4' });
+  const can = !!navigator.canShare && navigator.canShare({ files: [file()] });
+  const btn = a => shareMenu.querySelector(`[data-act="${a}"]`);
+  btn('share').hidden = !can;
+  btn('copy').disabled = !img || !window.ClipboardItem;
+  btn('email').disabled = !img;
+  btn('share').querySelector('small').textContent = img ? 'Mail, Outlook, Nearby sharing and other apps (email size)' : 'Mail, Outlook, Nearby sharing and other apps';
+  btn('copy').querySelector('small').textContent = img ? 'Then paste it into an email or chat (Ctrl+V)' : 'Only for photos';
+  $('#sharePath').textContent = '';
+  api(`/api/media/${m.id}/location`).then(d => { if (V.item === m) $('#sharePath').textContent = d.windows; }).catch(() => {});
+  if (img || can) shareBlob(m).catch(() => {});   // start now so Share/Copy are instant when clicked
+  shareMenu.hidden = false; $('#vShare').classList.add('on');
+}
+$('#vShare').onclick = e => { e.stopPropagation(); shareMenu.hidden ? openShare() : closeShare(); };
+document.addEventListener('click', e => { if (!shareMenu.hidden && !e.target.closest('.menu-wrap')) closeShare(); });
+
+function download(url) { const a = document.createElement('a'); a.href = url; a.download = ''; document.body.append(a); a.click(); a.remove(); }
+
+async function toPng(blob) {
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+  c.getContext('2d').drawImage(bmp, 0, 0);
+  return new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('could not convert the picture'))), 'image/png'));
+}
+
+shareMenu.addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]'); if (!b || b.disabled) return;
+  const m = V.item, act = b.dataset.act;
+  closeShare();
+  try {
+    if (act === 'share') {
+      const blob = await (m.kind === 'image' ? shareBlob(m) : fetch(shareUrl(m, 'full')).then(r => r.blob()));
+      const file = new File([blob], shareName(m), { type: blob.type });
+      try { await navigator.share({ files: [file], title: m.name }); }
+      catch (err) {
+        if (err.name === 'AbortError') return;   // closed the share window
+        if (err.name === 'NotAllowedError') return toast('The file took a moment to get ready. Click Share again.', 5000);
+        throw err;
+      }
+    } else if (act === 'copy') {
+      // pass a promise so the browser keeps the click's permission while the picture is prepared
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': shareBlob(m).then(toPng) })]);
+      toast('Picture copied. Paste it into your email or chat with Ctrl+V.', 4000);
+    } else if (act === 'email' || act === 'full') {
+      download(shareUrl(m, act, true));
+      toast('Saving to your Downloads folder…');
+    } else if (act === 'reveal') {
+      await post(`/api/media/${m.id}/reveal`);
+      toast('Opening File Explorer…');
+    } else if (act === 'path') {
+      const d = await api(`/api/media/${m.id}/location`);
+      await navigator.clipboard.writeText(d.windows);
+      toast('Copied: ' + d.windows, 5000);
+    }
+  } catch (err) { fail(err); }
+});
+
 document.addEventListener('keydown', e => {
   if (e.target.matches('input, select, textarea') || e.ctrlKey || e.metaKey || e.altKey) return;
   if ($('#viewer').hidden) return;
   const k = e.key;
-  if (k === 'Escape') { if (V.cropMode) exitCrop(); else if (V.drawMode) exitDraw(); else backToLibrary(); }
+  if (k === 'Escape') { if (!shareMenu.hidden) closeShare(); else if (V.cropMode) exitCrop(); else if (V.drawMode) exitDraw(); else backToLibrary(); }
   else if (k === 'ArrowLeft' && !V.cropMode) showItem(V.idx - 1);
   else if (k === 'ArrowRight' && !V.cropMode) showItem(V.idx + 1);
   else if (k === '+' || k === '=') zoomCenter(1.25);
@@ -980,6 +1062,7 @@ document.addEventListener('keydown', e => {
   else if (k === ']') rotate(1);
   else if (k === 'c' || k === 'C') V.cropMode ? exitCrop() : enterCrop();
   else if (k === 'Enter' && V.cropMode) $('#cropApply').click();
+  else if (k === 's' || k === 'S') shareMenu.hidden ? openShare() : closeShare();
   else if (k === 'f' || k === 'F') { const c = $('#vShowFaces'); c.checked = !c.checked; c.onchange({ target: c }); }
   else return;
   e.preventDefault();
@@ -1301,8 +1384,12 @@ function renderDupes() {
     clearTimeout(clickTimer);
     clickTimer = setTimeout(() => {  // wait to tell a click from a double-click
       const id = +t.dataset.id, g = D.groups[+t.closest('.dgroup').dataset.g];
-      if (!D.remove.has(id) && g.items.filter(it => !D.remove.has(it.id)).length <= 1) return toast('Keep at least one file from each set');
-      D.remove.has(id) ? D.remove.delete(id) : D.remove.add(id);
+      if (!D.remove.has(id) && g.items.filter(it => !D.remove.has(it.id)).length <= 1) {
+        // clicking the only file kept: in a pair, keep the other one instead
+        if (g.items.length !== 2) return toast('Keep at least one file from each set');
+        for (const it of g.items) D.remove.add(it.id);
+        D.remove.delete(g.items.find(it => it.id !== id).id);
+      } else D.remove.has(id) ? D.remove.delete(id) : D.remove.add(id);
       rerenderDupes();
     }, 220);
   };

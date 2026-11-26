@@ -777,6 +777,8 @@ def apply_folders(paths):
 SIMILAR_BITS = 4       # dHash bits (of 64) that may differ for two files to count as look-alikes
 ASPECT_TOLERANCE = 0.03
 COPY_NAME = re.compile(r"(copy|kopie|\(\d+\)|_edited\d*|[-_ ]\d$)", re.I)
+# folders files tend to land in by accident; a copy in a named folder (an event, a person) is kept instead
+DUMP_FOLDER = re.compile(r"^(downloads?|desktop|temp|tmp|new folder( \(\d+\))?|inbox|unsorted|misc|whatsapp images?)$", re.I)
 
 
 def _hash_file(path):
@@ -860,8 +862,11 @@ def _keep_order(m, roots):
     d = _dt(m["meta_date"])
     if yf and d:
         in_right_year = d.year == yf[1]
+    rel = os.path.relpath(m["folder"], rt) if rt else m["folder"]
+    in_dump = any(DUMP_FOLDER.match(seg) for seg in re.split(r"[\\/]", rel))
     return (-((m["width"] or 0) * (m["height"] or 0)),         # highest resolution
             bool(COPY_NAME.search(os.path.splitext(m["name"])[0])),  # not "photo (2).jpg" / "copy"
+            in_dump,                                            # not in Downloads, Desktop, ...
             not in_right_year,                                  # already in the right year folder
             -(m["size"] or 0),                                  # least compressed
             len(m["path"]), m["path"])

@@ -80,6 +80,20 @@
         <button id="vReset" title="Undo all edits to this item">Reset edits</button>
         <button id="vExport" title="Save an edited copy next to the original">Save copy</button>
         <span class="sep"></span>
+        <div class="menu-wrap">
+          <button id="vShare" title="Email, copy or find this file (S)">Share ▾</button>
+          <div id="shareMenu" class="menu" hidden>
+            <button data-act="share"><b>Share…</b><small>Mail, Outlook, Nearby sharing and other apps</small></button>
+            <button data-act="copy"><b>Copy picture</b><small>Then paste it into an email or chat (Ctrl+V)</small></button>
+            <hr>
+            <button data-act="email"><b>Download email-size copy</b><small>Smaller file, edits applied</small></button>
+            <button data-act="full"><b>Download full size</b><small>Edits applied if you made any</small></button>
+            <hr>
+            <button data-act="reveal"><b>Show in File Explorer</b><small>Opens the folder with this file selected</small></button>
+            <button data-act="path"><b>Copy file location</b><small id="sharePath"></small></button>
+          </div>
+        </div>
+        <span class="sep"></span>
         <button id="vAddFace" title="Draw a box around a face the scanner missed">Tag a person</button>
         <label class="chk"><input type="checkbox" id="vShowFaces" checked> Show faces</label>
         <div class="tb-spacer"></div>

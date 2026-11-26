@@ -88,7 +88,7 @@ On Save it kept the original in a hidden `.picasaoriginals` folder, so **Undo Sa
 | Movie Maker (slides plus video, audio track, transitions, title text) | ⬜ |
 | Gift CD / Export folder at reduced size | ⬜ export selection, resized, to a folder or zip |
 | Print layouts (contact sheet, 4×6 per page) | ⬜ browser print CSS |
-| Email photos (auto-resize) | ⬜ |
+| Email photos (auto-resize) | 🟡 viewer **Share** menu: Windows share window (Mail, Outlook…), copy picture to paste into an email, download an email-size (2048 px) or full-size copy with edits applied, show in File Explorer, copy file location. One photo at a time |
 | Web album sync, blogging, Google+ upload | ✖ not planned (services gone) |
 | Screen saver / desktop background | ✖ not applicable |
 | Geotagging with Google Earth / Places | ⬜ read GPS from EXIF and show it on a Leaflet map; set location manually |
